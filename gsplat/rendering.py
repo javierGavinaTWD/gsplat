@@ -498,6 +498,8 @@ def rasterization(
         means2d,
         radii,
         depths,
+        conics,
+        opacities,
         tile_size,
         tile_width,
         tile_height,

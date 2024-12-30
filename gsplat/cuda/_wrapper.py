@@ -344,6 +344,8 @@ def isect_tiles(
     means2d: Tensor,  # [C, N, 2] or [nnz, 2]
     radii: Tensor,  # [C, N] or [nnz]
     depths: Tensor,  # [C, N] or [nnz]
+    conics: Tensor,
+    opacities: Tensor, 
     tile_size: int,
     tile_width: int,
     tile_height: int,
@@ -384,6 +386,8 @@ def isect_tiles(
         assert means2d.shape == (nnz, 2), means2d.size()
         assert radii.shape == (nnz,), radii.size()
         assert depths.shape == (nnz,), depths.size()
+        assert conics.shape == (nnz, 3), conics.size()
+        assert opacities.shape == (nnz,), opacities.size()
         assert camera_ids is not None, "camera_ids is required if packed is True"
         assert gaussian_ids is not None, "gaussian_ids is required if packed is True"
         assert n_cameras is not None, "n_cameras is required if packed is True"
@@ -396,6 +400,8 @@ def isect_tiles(
         assert means2d.shape == (C, N, 2), means2d.size()
         assert radii.shape == (C, N), radii.size()
         assert depths.shape == (C, N), depths.size()
+        assert conics.shape == (C, N, 3), conics.size()
+        assert opacities.shape == (C, N), opacities.size()
 
     tiles_per_gauss, isect_ids, flatten_ids = _make_lazy_cuda_func("isect_tiles")(
         means2d.contiguous(),

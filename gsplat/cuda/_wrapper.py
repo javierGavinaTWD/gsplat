@@ -407,6 +407,8 @@ def isect_tiles(
         means2d.contiguous(),
         radii.contiguous(),
         depths.contiguous(),
+        conics.contiguous(),
+        opacities.contiguous(),
         camera_ids,
         gaussian_ids,
         C,

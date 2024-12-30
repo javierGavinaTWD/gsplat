@@ -27,6 +27,8 @@ __global__ void isect_tiles(
     const T *__restrict__ means2d,                   // [C, N, 2] or [nnz, 2]
     const int32_t *__restrict__ radii,               // [C, N] or [nnz]
     const T *__restrict__ depths,                    // [C, N] or [nnz]
+    const T *__restrict__ conics,
+    const T *__restrict__ opacities,
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -46,6 +48,14 @@ __global__ void isect_tiles(
         return;
     }
 
+    // Conics
+    const float4 con_o = {
+        conics[3 * idx],
+        conics[3 * idx + 1],
+        conics[3 * idx + 2],
+        opacities[idx]
+    };
+
     const OpT radius = radii[idx];
     if (radius <= 0) {
         if (first_pass) {
@@ -54,24 +64,20 @@ __global__ void isect_tiles(
         return;
     }
 
+    
+
     vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
 
-    OpT tile_radius = radius / static_cast<OpT>(tile_size);
-    OpT tile_x = mean2d.x / static_cast<OpT>(tile_size);
-    OpT tile_y = mean2d.y / static_cast<OpT>(tile_size);
-
-    // tile_min is inclusive, tile_max is exclusive
-    uint2 tile_min, tile_max;
-    tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius)), tile_width);
-    tile_min.y =
-        min(max(0, (uint32_t)floor(tile_y - tile_radius)), tile_height);
-    tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius)), tile_width);
-    tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius)), tile_height);
+    TileBounds bounds = duplicateToTilesTouched(
+        {mean2d.x, mean2d.y}, con_o, tile_width, tile_height
+    );
+    int2 rect_min = bounds.rect_min;
+    int2 rect_max = bounds.rect_max;
 
     if (first_pass) {
         // first pass only writes out tiles_per_gauss
         tiles_per_gauss[idx] = static_cast<int32_t>(
-            (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+            (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x)
         );
         return;
     }
@@ -88,15 +94,21 @@ __global__ void isect_tiles(
     }
     const int64_t cid_enc = cid << (32 + tile_n_bits);
 
-    int64_t depth_id_enc = (int64_t) * (int32_t *)&(depths[idx]);
+    int64_t depth_id_enc = static_cast<int64_t>(
+        __ldg(reinterpret_cast<const int32_t *>(&depths[idx]))
+    );
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-    for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
-        for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
-            int64_t tile_id = i * tile_width + j;
-            // e.g. tile_n_bits = 22:
-            // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
+
+    // Precompute common values outside loops
+    int32_t rect_width = rect_max.x - rect_min.x;
+    int32_t rect_height = rect_max.y - rect_min.y;
+
+    // Reduce computations in the inner loop
+    for (int32_t i = 0; i < rect_height; ++i) {
+        int64_t row_base_tile_id = (rect_min.y + i) * tile_width + rect_min.x;
+        for (int32_t j = 0; j < rect_width; ++j) {
+            int64_t tile_id = row_base_tile_id + j;
             isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            // the flatten index in [C * N] or [nnz]
             flatten_ids[cur_idx] = static_cast<int32_t>(idx);
             ++cur_idx;
         }
@@ -106,7 +118,9 @@ __global__ void isect_tiles(
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     const torch::Tensor &means2d,                    // [C, N, 2] or [nnz, 2]
     const torch::Tensor &radii,                      // [C, N] or [nnz]
-    const torch::Tensor &depths,                     // [C, N] or [nnz]
+    const torch::Tensor &depths,
+    const torch::Tensor &conics,                     // [C, N, 4, 4]
+    const torch::Tensor &opacities,                    // [C, N] or [nnz]
     const at::optional<torch::Tensor> &camera_ids,   // [nnz]
     const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
     const uint32_t C,
@@ -120,6 +134,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     GSPLAT_CHECK_INPUT(means2d);
     GSPLAT_CHECK_INPUT(radii);
     GSPLAT_CHECK_INPUT(depths);
+    GSPLAT_CHECK_INPUT(conics);
+    GSPLAT_CHECK_INPUT(opacities);
     if (camera_ids.has_value()) {
         GSPLAT_CHECK_INPUT(camera_ids.value());
     }
@@ -185,6 +201,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     reinterpret_cast<scalar_t *>(means2d.data_ptr<scalar_t>()),
                     radii.data_ptr<int32_t>(),
                     depths.data_ptr<scalar_t>(),
+                    conics.data_ptr<scalar_t>(),
+                    opacities.data_ptr<scalar_t>(),
                     nullptr,
                     tile_size,
                     tile_width,
@@ -228,6 +246,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     reinterpret_cast<scalar_t *>(means2d.data_ptr<scalar_t>()),
                     radii.data_ptr<int32_t>(),
                     depths.data_ptr<scalar_t>(),
+                    conics.data_ptr<scalar_t>(),
+                    opacities.data_ptr<scalar_t>(),
                     cum_tiles_per_gauss.data_ptr<int64_t>(),
                     tile_size,
                     tile_width,

@@ -1,5 +1,6 @@
 #include "bindings.h"
 #include "types.cuh"
+#include "gaussian_ops.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>

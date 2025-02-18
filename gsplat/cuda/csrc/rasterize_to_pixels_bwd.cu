@@ -235,7 +235,10 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                         v_xy_abs_local = {abs(v_xy_local.x), abs(v_xy_local.y)};
                     }
                     if (v_means2d_sqr != nullptr) {
-                        v_xy_sqr_local = {v_xy_local.x * v_xy_local.x, v_xy_local.y * v_xy_local.y};
+                        v_xy_sqr_local = {
+                            v_xy_local.x * v_xy_local.x,
+                            v_xy_local.y * v_xy_local.y
+                        };
                     }
                     v_opacity_local = vis * v_alpha;
                 }
@@ -279,7 +282,7 @@ __global__ void rasterize_to_pixels_bwd_kernel(
                 }
 
                 if (v_means2d_sqr != nullptr) {
-                    S *v_xy_sqr_ptr = (S*)(v_means2d_sqr) + 2 * g;
+                    S *v_xy_sqr_ptr = (S *)(v_means2d_sqr) + 2 * g;
                     gpuAtomicAdd(v_xy_sqr_ptr, v_xy_sqr_local.x);
                     gpuAtomicAdd(v_xy_sqr_ptr + 1, v_xy_sqr_local.y);
                 }
@@ -321,7 +324,8 @@ call_kernel_with_dim(
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
     bool absgrad,
-    bool sqrgrad) {
+    bool sqrgrad
+) {
 
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -414,7 +418,9 @@ call_kernel_with_dim(
                               v_means2d_abs.data_ptr<float>()
                           )
                         : nullptr,
-                sqrgrad ? reinterpret_cast<vec2<float> *>(v_means2d_sqr.data_ptr<float>())
+                sqrgrad ? reinterpret_cast<vec2<float> *>(
+                              v_means2d_sqr.data_ptr<float>()
+                          )
                         : nullptr,
                 reinterpret_cast<vec2<float> *>(v_means2d.data_ptr<float>()),
                 reinterpret_cast<vec3<float> *>(v_conics.data_ptr<float>()),
@@ -424,7 +430,7 @@ call_kernel_with_dim(
     }
 
     return std::make_tuple(
-        v_means2d_sqr,v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
+        v_means2d_sqr, v_means2d_abs, v_means2d, v_conics, v_colors, v_opacities
     );
 }
 
@@ -458,7 +464,8 @@ rasterize_to_pixels_bwd_tensor(
     const torch::Tensor &v_render_alphas, // [C, image_height, image_width, 1]
     // options
     bool absgrad,
-    bool sqrgrad) {
+    bool sqrgrad
+) {
 
     GSPLAT_CHECK_INPUT(colors);
     uint32_t COLOR_DIM = colors.size(-1);
@@ -482,7 +489,7 @@ rasterize_to_pixels_bwd_tensor(
             v_render_colors,                                                   \
             v_render_alphas,                                                   \
             absgrad,                                                           \
-            sqrgrad                                                                \
+            sqrgrad                                                            \
         );
 
     switch (COLOR_DIM) {

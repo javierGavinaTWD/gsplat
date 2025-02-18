@@ -206,7 +206,7 @@ def remove(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             state[k] = v[sel]
 
 
@@ -336,7 +336,8 @@ def sample_add(
     # update the extra running state
     for k, v in state.items():
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k == "sqrgrad":
+            v_new = torch.ones_like(v_new, device=v.device)
             state[k] = torch.cat((v, v_new))
 
 

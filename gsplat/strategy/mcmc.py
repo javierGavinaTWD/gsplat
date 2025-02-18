@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .base import Strategy
-from .ops import inject_noise_to_position, relocate, sample_add
+from .ops import inject_noise_to_position, relocate, sample_add, remove
 
 
 @dataclass
@@ -28,6 +28,9 @@ class MCMCStrategy(Strategy):
         refine_stop_iter (int): Stop refining GSs after this iteration. Default to 25_000.
         refine_every (int): Refine GSs every this steps. Default to 100.
         min_opacity (float): GSs with opacity below this value will be pruned. Default to 0.005.
+        sqrgrad (bool): Whether to use squared gradients. Default to False.
+        prune_rate (float): Percentile of lower scored GSs to be pruned. Default to 0.01 (1%)
+        growth_rate (float): Percentile of GSs to be added. Default to 0.05 (5%) (Must be higher than prune_rate)
         verbose (bool): Whether to print verbose information. Default to False.
 
     Examples:
@@ -52,6 +55,9 @@ class MCMCStrategy(Strategy):
     refine_stop_iter: int = 25_000
     refine_every: int = 100
     min_opacity: float = 0.005
+    sqrgrad: bool = False
+    prune_rate: float = 0.01
+    growth_rate: float = 0.05
     verbose: bool = False
 
     def initialize_state(self) -> Dict[str, Any]:
@@ -61,7 +67,10 @@ class MCMCStrategy(Strategy):
         for n in range(n_max):
             for k in range(n + 1):
                 binoms[n, k] = math.comb(n, k)
-        return {"binoms": binoms}
+        state = {"binoms": binoms}
+        if self.sqrgrad:
+            state["sqrgrad"] = None
+        return state
 
     def check_sanity(
         self,
@@ -117,7 +126,17 @@ class MCMCStrategy(Strategy):
         # move to the correct device
         state["binoms"] = state["binoms"].to(params["means"].device)
 
-        binoms = state["binoms"]
+        # initialize sqrgrad in the first run
+        if self.sqrgrad and state["sqrgrad"] is None:
+            n_gaussian = len(list(params.values())[0])
+            state["sqrgrad"] = torch.zeros(n_gaussian, device=params["means"].device)
+
+        if self.sqrgrad:
+            sqrgrads = info["means2d"].sqrgrad.clone()
+            sel = info["radii"] > 0.0
+            gs_ids = torch.where(sel)[1]
+            sqrgrads = sqrgrads[sel]
+            state["sqrgrad"].index_add_(0, gs_ids, torch.sum(sqrgrads, dim=-1))
 
         if (
             step < self.refine_stop_iter
@@ -125,17 +144,27 @@ class MCMCStrategy(Strategy):
             and step % self.refine_every == 0
         ):
             # teleport GSs
-            n_relocated_gs = self._relocate_gs(params, optimizers, binoms)
+            n_relocated_gs = self._relocate_gs(params, optimizers, state)
             if self.verbose:
                 print(f"Step {step}: Relocated {n_relocated_gs} GSs.")
 
             # add new GSs
-            n_new_gs = self._add_new_gs(params, optimizers, binoms)
+            n_new_gs = self._add_new_gs(params, optimizers, state)
             if self.verbose:
-                print(
-                    f"Step {step}: Added {n_new_gs} GSs. "
-                    f"Now having {len(params['means'])} GSs."
-                )
+                print(f"Step {step}: Added {n_new_gs} GSs. ")
+
+            if self.sqrgrad:
+                # prune GSs
+                n_pruned_gs = self._prune_gs(params, optimizers, state)
+                if self.verbose:
+                    print(
+                        f"Step {step}: Pruned {n_pruned_gs} GSs. "
+                        f"Now having {len(params['means'])} GSs."
+                    )
+
+            # reset running state
+            if self.sqrgrad:
+                state["sqrgrad"].zero_()
 
             torch.cuda.empty_cache()
 
@@ -149,7 +178,7 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: Tensor,
+        state: Dict[str, Any],
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.min_opacity
@@ -160,7 +189,7 @@ class MCMCStrategy(Strategy):
                 optimizers=optimizers,
                 state={},
                 mask=dead_mask,
-                binoms=binoms,
+                binoms=state["binoms"],
                 min_opacity=self.min_opacity,
             )
         return n_gs
@@ -170,18 +199,33 @@ class MCMCStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: Tensor,
+        state: Dict[str, Any],
     ) -> int:
         current_n_points = len(params["means"])
-        n_target = min(self.cap_max, int(1.05 * current_n_points))
+        n_target = min(self.cap_max, int(current_n_points * (1 + self.growth_rate)))
         n_gs = max(0, n_target - current_n_points)
         if n_gs > 0:
             sample_add(
                 params=params,
                 optimizers=optimizers,
-                state={},
+                state=state,
                 n=n_gs,
-                binoms=binoms,
+                binoms=state["binoms"],
                 min_opacity=self.min_opacity,
             )
         return n_gs
+
+    @torch.no_grad()
+    def _prune_gs(
+        self,
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Any],
+    ) -> int:
+        sqrgrad_values = state["sqrgrad"]
+        threshold = torch.quantile(sqrgrad_values, self.prune_rate)
+        prune_mask = sqrgrad_values <= threshold
+        n_pruned = prune_mask.sum().item()
+        if n_pruned > 0:
+            remove(params=params, optimizers=optimizers, state=state, mask=prune_mask)
+        return n_pruned

@@ -78,6 +78,7 @@ class DensificationStrategyConfig:
     num_cloned_gaussians: int = 2
 
     # MCMC-Specific Parameters
+    can_inject_noise: bool = False
     noise_lr: float = 5e5
     n_max_binoms: int = 51
     min_opa_relocate: float = 0.005
@@ -133,6 +134,7 @@ class DensificationStrategyConfig:
                 "min_opa_relocate": 0.005,
                 "n_max_binoms": 51,
                 "initialized_state_ids": ["binoms"],
+                "can_inject_noise": True,
                 "updatable_state_ids": [],
                 "resetable_state_ids": [],
             },

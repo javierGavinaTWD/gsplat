@@ -69,6 +69,7 @@ class MultiStrategy(Strategy):
         state: Dict[str, any],
         step: int,
         info: Dict[str, any],
+        lr: float,
         packed: bool = False,
     ):
         if step >= self.config.end_post_backward_steps:
@@ -101,10 +102,7 @@ class MultiStrategy(Strategy):
                 n_splitted = self._split_gs(params, optimizers, state, step, n_cloned)
 
                 if self.config.verbose:
-                    print(
-                        f"Step {step}: {n_splitted} GSs splitted"
-                        f"Now having {len(params['means'])} GSs."
-                    )
+                    print(f"Step {step}: {n_splitted} GSs splitted")
 
         # Relocation process
         if self.config.start_relocation_steps is not None:
@@ -121,10 +119,7 @@ class MultiStrategy(Strategy):
                 n_relocated = self._relocate_gs(params, optimizers, binoms)
 
                 if self.config.verbose:
-                    print(
-                        f"Step {step}: {n_relocated} GSs relocated"
-                        f"Now having {len(params['means'])} GSs."
-                    )
+                    print(f"Step {step}: {n_relocated} GSs relocated")
 
         # Add multinomial samples process
         if self.config.start_add_samples_steps is not None:
@@ -141,10 +136,7 @@ class MultiStrategy(Strategy):
                 n_new_gs = self._add_new_gs(params, optimizers, binoms)
 
                 if self.config.verbose:
-                    print(
-                        f"Step {step}: {n_new_gs} GSs added"
-                        f"Now having {len(params['means'])} GSs."
-                    )
+                    print(f"Step {step}: {n_new_gs} GSs added")
 
         # Pruning process
         if self.config.start_pruning_steps is not None:
@@ -157,12 +149,28 @@ class MultiStrategy(Strategy):
                 n_prune = self._prune_gs(params, optimizers, state, step)
 
                 if self.config.verbose:
-                    print(
-                        f"Step {step}: {n_new_gs} GSs added"
-                        f"Now having {len(params['means'])} GSs."
-                    )
+                    print(f"Step {step}: {n_prune} GSs removed")
 
-        self._reset_state()
+        if self.config.verbose:
+            print(f"Now having {len(params['means'])} GSs.")
+
+        self._reset_state(state)
+
+        if self.config.can_inject_noise:
+            self._inject_noise_to_position(
+                params=params,
+                optimizers=optimizers,
+                state={},
+                scaler=lr * self.config.noise_lr,
+            )
+
+        if step % self.config.reset_every == 0:
+            reset_opa(
+                params=params,
+                optimizers=optimizers,
+                state=state,
+                value=self.config.min_opa_prune * 2.0,
+            )
 
     def _update_state(
         self,
@@ -243,7 +251,7 @@ class MultiStrategy(Strategy):
                     radii / float(max(info["width"], info["height"])),
                 )
 
-    @torch.no_grad
+    @torch.no_grad()
     def _clone_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -278,7 +286,7 @@ class MultiStrategy(Strategy):
             )
         return n_cloned
 
-    @torch.no_grad
+    @torch.no_grad()
     def _split_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -328,7 +336,7 @@ class MultiStrategy(Strategy):
 
         return n_split
 
-    @torch.no_grad
+    @torch.no_grad()
     def _relocate_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -349,7 +357,7 @@ class MultiStrategy(Strategy):
             )
         return n_relocate
 
-    @torch.no_grad
+    @torch.no_grad()
     def _add_new_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -370,7 +378,7 @@ class MultiStrategy(Strategy):
             )
         return n_add
 
-    @torch.no_grad
+    @torch.no_grad()
     def _prune_gs(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
@@ -410,3 +418,31 @@ class MultiStrategy(Strategy):
         for state_id in self.config.resetable_state_ids:
             if state_id in state:
                 state[state_id].zero_()
+
+    @torch.no_grad()
+    def _inject_noise_to_position(
+        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
+        optimizers: Dict[str, torch.optim.Optimizer],
+        state: Dict[str, Tensor],
+        scaler: float,
+    ):
+        opacities = torch.sigmoid(params["opacities"].flatten())
+        scales = torch.exp(params["scales"])
+        covars, _ = quat_scale_to_covar_preci(
+            params["quats"],
+            scales,
+            compute_covar=True,
+            compute_preci=False,
+            triu=False,
+        )
+
+        def op_sigmoid(x, k=100, x0=0.995):
+            return 1 / (1 + torch.exp(-k * (x - x0)))
+
+        noise = (
+            torch.randn_like(params["means"])
+            * (op_sigmoid(1 - opacities)).unsqueeze(-1)
+            * scaler
+        )
+        noise = torch.einsum("bij,bj->bi", covars, noise)
+        params["means"].add_(noise)

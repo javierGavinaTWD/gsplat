@@ -26,13 +26,17 @@ class MultiStrategy(Strategy):
                 for k in range(n + 1):
                     binoms[n, k] = math.comb(n, k)
 
-            state["binoms"] = binoms
+            state["binoms"] = binoms.to(torch.device("cuda"))
 
         if "scene_scale" in state:
             state["scene_scale"] = scene_scale
 
-        if "radii" in state and self.config.refine_scale2d_stop_iter > 0:
-            state["radii"] = None
+        if "radii" in state:
+            if (
+                self.config.refine_scale2d_stop_iter is None
+                or self.config.refine_scale2d_stop_iter <= 0
+            ):
+                del state["radii"]
 
         return state
 
@@ -81,7 +85,7 @@ class MultiStrategy(Strategy):
         if self.config.start_cloning_steps is not None:
             if (
                 step > self.config.start_cloning_steps
-                and step % self.config.cloning_interval
+                and step % self.config.cloning_interval == 0
                 and step <= self.config.end_cloning_steps
             ):
                 n_cloned = self._clone_gs(params, optimizers, state, step)
@@ -96,7 +100,7 @@ class MultiStrategy(Strategy):
         if self.config.start_splitting_steps is not None:
             if (
                 step > self.config.start_splitting_steps
-                and step % self.config.splitting_interval
+                and step % self.config.splitting_interval == 0
                 and step <= self.config.end_splitting_steps
             ):
                 n_splitted = self._split_gs(params, optimizers, state, step, n_cloned)
@@ -108,7 +112,7 @@ class MultiStrategy(Strategy):
         if self.config.start_relocation_steps is not None:
             if (
                 step > self.config.start_relocation_steps
-                and step % self.config.relocation_interval
+                and step % self.config.relocation_interval == 0
                 and step <= self.config.end_relocation_steps
             ):
                 assert (
@@ -125,7 +129,7 @@ class MultiStrategy(Strategy):
         if self.config.start_add_samples_steps is not None:
             if (
                 step > self.config.start_add_samples_steps
-                and step % self.config.add_samples_interval
+                and step % self.config.add_samples_interval == 0
                 and step <= self.config.end_add_samples_steps
             ):
                 assert (
@@ -142,7 +146,7 @@ class MultiStrategy(Strategy):
         if self.config.start_pruning_steps is not None:
             if (
                 step > self.config.start_pruning_steps
-                and step % self.config.pruning_interval
+                and step % self.config.pruning_interval == 0
                 and step <= self.config.end_pruning_steps
             ):
 
@@ -157,20 +161,21 @@ class MultiStrategy(Strategy):
         self._reset_state(state)
 
         if self.config.can_inject_noise:
-            self._inject_noise_to_position(
+            inject_noise_to_position(
                 params=params,
                 optimizers=optimizers,
                 state={},
                 scaler=lr * self.config.noise_lr,
             )
 
-        if step % self.config.reset_every == 0:
-            reset_opa(
-                params=params,
-                optimizers=optimizers,
-                state=state,
-                value=self.config.min_opa_prune * 2.0,
-            )
+        if self.config.reset_every is not None:
+            if step % self.config.reset_every == 0:
+                reset_opa(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    value=self.config.min_opa_prune * 2.0,
+                )
 
     def _update_state(
         self,
@@ -315,13 +320,8 @@ class MultiStrategy(Strategy):
             is_split |= state["radii"] > self.config.grow_scale2d
         n_split = is_split.sum().item()
 
-        # new GSs added by duplication will not be split
-        is_split = torch.cat(
-            [
-                is_split,
-                torch.zeros(n_cloned, dtype=torch.bool, device=device),
-            ]
-        )
+        # mark the positions or the cloned gaussians to NOT be splitted
+        is_split[-n_cloned:] = False
 
         # then split
         if n_split > 0:
@@ -418,31 +418,4 @@ class MultiStrategy(Strategy):
         for state_id in self.config.resetable_state_ids:
             if state_id in state:
                 state[state_id].zero_()
-
-    @torch.no_grad()
-    def _inject_noise_to_position(
-        params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
-        optimizers: Dict[str, torch.optim.Optimizer],
-        state: Dict[str, Tensor],
-        scaler: float,
-    ):
-        opacities = torch.sigmoid(params["opacities"].flatten())
-        scales = torch.exp(params["scales"])
-        covars, _ = quat_scale_to_covar_preci(
-            params["quats"],
-            scales,
-            compute_covar=True,
-            compute_preci=False,
-            triu=False,
-        )
-
-        def op_sigmoid(x, k=100, x0=0.995):
-            return 1 / (1 + torch.exp(-k * (x - x0)))
-
-        noise = (
-            torch.randn_like(params["means"])
-            * (op_sigmoid(1 - opacities)).unsqueeze(-1)
-            * scaler
-        )
-        noise = torch.einsum("bij,bj->bi", covars, noise)
-        params["means"].add_(noise)
+        torch.cuda.empty_cache

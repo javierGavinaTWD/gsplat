@@ -90,34 +90,47 @@ def _update_param_with_optimizer(
 
 
 @torch.no_grad()
-def duplicate(
+def clone(
     params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    num_clones: int = 2,
 ):
-    """Inplace duplicate the Gaussian with the given mask.
+    """Inplace duplicate the Gaussian with the given mask, allowing N clones.
 
     Args:
         params: A dictionary of parameters.
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to duplicate the Gaussians.
+        num_clones: Number of copies to create per selected Gaussian.
     """
+
+    if num_clones < 1:
+        raise ValueError("num_clones must be at least 1.")
+
     device = mask.device
     sel = torch.where(mask)[0]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        return torch.nn.Parameter(torch.cat([p, p[sel]]), requires_grad=p.requires_grad)
+        """Duplicates the selected parameters num_clones times."""
+        new_values = p[sel].repeat(num_clones, *[1] * (p.dim() - 1))  # Clone N times
+        return torch.nn.Parameter(
+            torch.cat([p, new_values]), requires_grad=p.requires_grad
+        )
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        return torch.cat([v, torch.zeros((len(sel), *v.shape[1:]), device=device)])
+        """Expands optimizer state with zero-initialized values for new Gaussians."""
+        new_zeros = torch.zeros((num_clones * len(sel), *v.shape[1:]), device=device)
+        return torch.cat([v, new_zeros])
 
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
-            state[k] = torch.cat((v, v[sel]))
+            new_values = v[sel].repeat(num_clones, *[1] * (v.dim() - 1))
+            state[k] = torch.cat((v, new_values))
 
 
 @torch.no_grad()
@@ -126,6 +139,7 @@ def split(
     optimizers: Dict[str, torch.optim.Optimizer],
     state: Dict[str, Tensor],
     mask: Tensor,
+    num_splits: int = 2,
     revised_opacity: bool = False,
 ):
     """Inplace split the Gaussian with the given mask.
@@ -134,6 +148,7 @@ def split(
         params: A dictionary of parameters.
         optimizers: A dictionary of optimizers, each corresponding to a parameter.
         mask: A boolean mask to split the Gaussians.
+        num_splits: Number of splits.
         revised_opacity: Whether to use revised opacity formulation
           from arXiv:2404.06109. Default: False.
     """
@@ -148,18 +163,20 @@ def split(
         "nij,nj,bnj->bni",
         rotmats,
         scales,
-        torch.randn(2, len(scales), 3, device=device),
-    )  # [2, N, 3]
+        torch.randn(num_splits, len(scales), 3, device=device),
+    )  # [num_splits, N, 3]
 
     def param_fn(name: str, p: Tensor) -> Tensor:
-        repeats = [2] + [1] * (p.dim() - 1)
+        repeats = [num_splits] + [1] * (p.dim() - 1)
         if name == "means":
-            p_split = (p[sel] + samples).reshape(-1, 3)  # [2N, 3]
+            p_split = (p[sel] + samples).reshape(-1, 3)  # [num_splits * N, 3]
         elif name == "scales":
-            p_split = torch.log(scales / 1.6).repeat(2, 1)  # [2N, 3]
+            p_split = torch.log(scales / 1.6).repeat(
+                num_splits, 1
+            )  # [num_splits * N, 3]
         elif name == "opacities" and revised_opacity:
             new_opacities = 1.0 - torch.sqrt(1.0 - torch.sigmoid(p[sel]))
-            p_split = torch.logit(new_opacities).repeat(repeats)  # [2N]
+            p_split = torch.logit(new_opacities).repeat(repeats)  # [num_splits * N]
         else:
             p_split = p[sel].repeat(repeats)
         p_new = torch.cat([p[rest], p_split])
@@ -167,7 +184,7 @@ def split(
         return p_new
 
     def optimizer_fn(key: str, v: Tensor) -> Tensor:
-        v_split = torch.zeros((2 * len(sel), *v.shape[1:]), device=device)
+        v_split = torch.zeros((num_splits * len(sel), *v.shape[1:]), device=device)
         return torch.cat([v[rest], v_split])
 
     # update the parameters and the state in the optimizers
@@ -175,7 +192,7 @@ def split(
     # update the extra running state
     for k, v in state.items():
         if isinstance(v, torch.Tensor):
-            repeats = [2] + [1] * (v.dim() - 1)
+            repeats = [num_splits] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
             state[k] = torch.cat((v[rest], v_new))
 

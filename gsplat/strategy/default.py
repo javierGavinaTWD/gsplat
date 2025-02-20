@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple, Union
 import torch
 
 from .base import Strategy
-from .ops import duplicate, remove, reset_opa, split
+from .ops import clone, remove, reset_opa, split
 from typing_extensions import Literal
 
 
@@ -288,7 +288,7 @@ class DefaultStrategy(Strategy):
 
         # first duplicate
         if n_dupli > 0:
-            duplicate(params=params, optimizers=optimizers, state=state, mask=is_dupli)
+            clone(params=params, optimizers=optimizers, state=state, mask=is_dupli)
 
         # new GSs added by duplication will not be split
         is_split = torch.cat(

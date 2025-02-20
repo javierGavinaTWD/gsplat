@@ -13,9 +13,6 @@ class MultiStrategy(Strategy):
         strategy="default"
     )
 
-    def __post_init__(self):
-        self.config.apply_strategy_defaults()
-
     def initialize_state(self, scene_scale: float = 1.0) -> Dict[str, any]:
         state = {state_id: None for state_id in self.config.initialized_state_ids}
 

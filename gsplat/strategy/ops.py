@@ -128,7 +128,7 @@ def clone(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             new_values = v[sel].repeat(num_clones, *[1] * (v.dim() - 1))
             state[k] = torch.cat((v, new_values))
 
@@ -191,7 +191,7 @@ def split(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             repeats = [num_splits] + [1] * (v.dim() - 1)
             v_new = v[sel].repeat(repeats)
             state[k] = torch.cat((v[rest], v_new))
@@ -223,7 +223,7 @@ def remove(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             state[k] = v[sel]
 
 

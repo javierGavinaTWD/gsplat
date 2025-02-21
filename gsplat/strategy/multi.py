@@ -17,7 +17,7 @@ class MultiStrategy(Strategy):
         state = {state_id: None for state_id in self.config.initialized_state_ids}
 
         if "binoms" in state:
-            n_max = 51
+            n_max = self.config.n_max_binoms
             binoms = torch.zeros((n_max, n_max), dtype=torch.float32)
             for n in range(n_max):
                 for k in range(n + 1):
@@ -73,89 +73,87 @@ class MultiStrategy(Strategy):
         lr: float,
         packed: bool = False,
     ):
-        if step >= self.config.end_post_backward_steps:
-            return
+        if step < self.config.end_post_backward_steps:
 
-        self._update_state(params, state, info, packed=packed)
+            self._update_state(params, state, info, packed=packed)
 
-        # Cloning process
-        if self.config.start_cloning_steps is not None:
-            if (
-                step > self.config.start_cloning_steps
-                and step % self.config.cloning_interval == 0
-                and step <= self.config.end_cloning_steps
-            ):
-                n_cloned = self._clone_gs(params, optimizers, state, step)
+            # Cloning process
+            if self.config.start_cloning_steps is not None:
+                if (
+                    step > self.config.start_cloning_steps
+                    and step % self.config.cloning_interval == 0
+                    and step <= self.config.end_cloning_steps
+                ):
+                    n_cloned = self._clone_gs(params, optimizers, state, step)
 
-                if self.config.verbose:
-                    print(
-                        f"Step {step}: {n_cloned} GSs cloned"
-                        f"Now having {len(params['means'])} GSs."
+                    if self.config.verbose:
+                        print(f"Step {step}: {n_cloned} GSs cloned")
+
+            # Splitting process
+            if self.config.start_splitting_steps is not None:
+                if (
+                    step > self.config.start_splitting_steps
+                    and step % self.config.splitting_interval == 0
+                    and step <= self.config.end_splitting_steps
+                ):
+                    n_splitted = self._split_gs(
+                        params, optimizers, state, step, n_cloned
                     )
 
-        # Splitting process
-        if self.config.start_splitting_steps is not None:
-            if (
-                step > self.config.start_splitting_steps
-                and step % self.config.splitting_interval == 0
-                and step <= self.config.end_splitting_steps
-            ):
-                n_splitted = self._split_gs(params, optimizers, state, step, n_cloned)
+                    if self.config.verbose:
+                        print(f"Step {step}: {n_splitted} GSs splitted")
 
-                if self.config.verbose:
-                    print(f"Step {step}: {n_splitted} GSs splitted")
+            # Relocation process
+            if self.config.start_relocation_steps is not None:
+                if (
+                    step > self.config.start_relocation_steps
+                    and step % self.config.relocation_interval == 0
+                    and step <= self.config.end_relocation_steps
+                ):
+                    assert (
+                        "binoms" in state
+                    ), "binoms is required for relocation but missing"
+                    binoms = state["binoms"]
 
-        # Relocation process
-        if self.config.start_relocation_steps is not None:
-            if (
-                step > self.config.start_relocation_steps
-                and step % self.config.relocation_interval == 0
-                and step <= self.config.end_relocation_steps
-            ):
-                assert (
-                    "binoms" in state
-                ), "binoms is required for relocation but missing"
-                binoms = state["binoms"]
+                    n_relocated = self._relocate_gs(params, optimizers, binoms)
 
-                n_relocated = self._relocate_gs(params, optimizers, binoms)
+                    if self.config.verbose:
+                        print(f"Step {step}: {n_relocated} GSs relocated")
 
-                if self.config.verbose:
-                    print(f"Step {step}: {n_relocated} GSs relocated")
+            # Add multinomial samples process
+            if self.config.start_add_samples_steps is not None:
+                if (
+                    step > self.config.start_add_samples_steps
+                    and step % self.config.add_samples_interval == 0
+                    and step <= self.config.end_add_samples_steps
+                ):
+                    assert (
+                        "binoms" in state
+                    ), "binoms is required for relocation but missing"
+                    binoms = state["binoms"]
 
-        # Add multinomial samples process
-        if self.config.start_add_samples_steps is not None:
-            if (
-                step > self.config.start_add_samples_steps
-                and step % self.config.add_samples_interval == 0
-                and step <= self.config.end_add_samples_steps
-            ):
-                assert (
-                    "binoms" in state
-                ), "binoms is required for relocation but missing"
-                binoms = state["binoms"]
+                    n_new_gs = self._add_new_gs(params, optimizers, binoms)
 
-                n_new_gs = self._add_new_gs(params, optimizers, binoms)
+                    if self.config.verbose:
+                        print(f"Step {step}: {n_new_gs} GSs added")
 
-                if self.config.verbose:
-                    print(f"Step {step}: {n_new_gs} GSs added")
+            # Pruning process
+            if self.config.start_pruning_steps is not None:
+                if (
+                    step > self.config.start_pruning_steps
+                    and step % self.config.pruning_interval == 0
+                    and step <= self.config.end_pruning_steps
+                ):
 
-        # Pruning process
-        if self.config.start_pruning_steps is not None:
-            if (
-                step > self.config.start_pruning_steps
-                and step % self.config.pruning_interval == 0
-                and step <= self.config.end_pruning_steps
-            ):
+                    n_prune = self._prune_gs(params, optimizers, state, step)
 
-                n_prune = self._prune_gs(params, optimizers, state, step)
+                    if self.config.verbose:
+                        print(f"Step {step}: {n_prune} GSs removed")
 
-                if self.config.verbose:
-                    print(f"Step {step}: {n_prune} GSs removed")
+            if self.config.verbose and step % 100 == 0:
+                print(f"Now having {len(params['means'])} GSs.")
 
-        if self.config.verbose:
-            print(f"Now having {len(params['means'])} GSs.")
-
-        self._reset_state(state)
+            self._reset_state(state)
 
         if self.config.can_inject_noise:
             inject_noise_to_position(
@@ -165,14 +163,15 @@ class MultiStrategy(Strategy):
                 scaler=lr * self.config.noise_lr,
             )
 
-        if self.config.reset_every is not None:
-            if step % self.config.reset_every == 0:
-                reset_opa(
-                    params=params,
-                    optimizers=optimizers,
-                    state=state,
-                    value=self.config.min_opa_prune * 2.0,
-                )
+        if step < self.config.end_post_backward_steps:
+            if self.config.reset_every is not None:
+                if step % self.config.reset_every == 0:
+                    reset_opa(
+                        params=params,
+                        optimizers=optimizers,
+                        state=state,
+                        value=self.config.min_opa_prune * 2.0,
+                    )
 
     def _update_state(
         self,
@@ -315,10 +314,10 @@ class MultiStrategy(Strategy):
         is_split = is_grad_high & is_large
         if step < self.config.refine_scale2d_stop_iter and "radii" in state:
             is_split |= state["radii"] > self.config.grow_scale2d
-        n_split = is_split.sum().item()
 
         # mark the positions or the cloned gaussians to NOT be splitted
         is_split[-n_cloned:] = False
+        n_split = is_split.sum().item()
 
         # then split
         if n_split > 0:
@@ -415,4 +414,4 @@ class MultiStrategy(Strategy):
         for state_id in self.config.resetable_state_ids:
             if state_id in state:
                 state[state_id].zero_()
-        torch.cuda.empty_cache
+        torch.cuda.empty_cache()

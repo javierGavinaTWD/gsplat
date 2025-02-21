@@ -124,7 +124,7 @@ class DensificationStrategyConfig:
             "mcmc": {
                 "max_gaussians": 1_000_000,
                 "noise_lr": 5e5,
-                "end_post_backward_steps": 15_000,
+                "end_post_backward_steps": 25_000,
                 "start_relocation_steps": 500,
                 "end_relocation_steps": 25_000,
                 "relocation_interval": 100,

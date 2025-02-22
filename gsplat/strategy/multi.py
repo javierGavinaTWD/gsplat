@@ -28,13 +28,6 @@ class MultiStrategy(Strategy):
         if "scene_scale" in state:
             state["scene_scale"] = scene_scale
 
-        if "radii" in state:
-            if (
-                self.config.refine_scale2d_stop_iter is None
-                or self.config.refine_scale2d_stop_iter <= 0
-            ):
-                del state["radii"]
-
         return state
 
     def check_sanity(
@@ -73,89 +66,88 @@ class MultiStrategy(Strategy):
         lr: float,
         packed: bool = False,
     ):
-        if step < self.config.end_post_backward_steps:
+        if step >= self.config.end_post_backward_steps:
+            return
 
-            self._update_state(params, state, info, packed=packed)
+        self._update_state(params, state, info, packed=packed)
 
-            # Cloning process
-            if self.config.start_cloning_steps is not None:
-                if (
-                    step > self.config.start_cloning_steps
-                    and step % self.config.cloning_interval == 0
-                    and step <= self.config.end_cloning_steps
-                ):
-                    n_cloned = self._clone_gs(params, optimizers, state, step)
+        # Cloning process
+        if self.config.f_can_clone:
+            if (
+                step > self.config.start_cloning_steps
+                and step % self.config.cloning_interval == 0
+                and step <= self.config.end_cloning_steps
+            ):
+                n_cloned = self._clone_gs(params, optimizers, state, step)
 
-                    if self.config.verbose:
-                        print(f"Step {step}: {n_cloned} GSs cloned")
+                if self.config.verbose:
+                    print(f"Step {step}: {n_cloned} GSs cloned")
 
-            # Splitting process
-            if self.config.start_splitting_steps is not None:
-                if (
-                    step > self.config.start_splitting_steps
-                    and step % self.config.splitting_interval == 0
-                    and step <= self.config.end_splitting_steps
-                ):
-                    n_splitted = self._split_gs(
-                        params, optimizers, state, step, n_cloned
-                    )
+        # Splitting process
+        if self.config.f_can_split:
+            if (
+                step > self.config.start_splitting_steps
+                and step % self.config.splitting_interval == 0
+                and step <= self.config.end_splitting_steps
+            ):
+                n_splitted = self._split_gs(params, optimizers, state, step, n_cloned)
 
-                    if self.config.verbose:
-                        print(f"Step {step}: {n_splitted} GSs splitted")
+                if self.config.verbose:
+                    print(f"Step {step}: {n_splitted} GSs splitted")
 
-            # Relocation process
-            if self.config.start_relocation_steps is not None:
-                if (
-                    step > self.config.start_relocation_steps
-                    and step % self.config.relocation_interval == 0
-                    and step <= self.config.end_relocation_steps
-                ):
-                    assert (
-                        "binoms" in state
-                    ), "binoms is required for relocation but missing"
-                    binoms = state["binoms"]
+        # Relocation process
+        if self.config.f_can_relocate:
+            if (
+                step > self.config.start_relocation_steps
+                and step % self.config.relocation_interval == 0
+                and step <= self.config.end_relocation_steps
+            ):
+                assert (
+                    "binoms" in state
+                ), "binoms is required for relocation but missing"
+                binoms = state["binoms"]
 
-                    n_relocated = self._relocate_gs(params, optimizers, binoms)
+                n_relocated = self._relocate_gs(params, optimizers, binoms)
 
-                    if self.config.verbose:
-                        print(f"Step {step}: {n_relocated} GSs relocated")
+                if self.config.verbose:
+                    print(f"Step {step}: {n_relocated} GSs relocated")
 
-            # Add multinomial samples process
-            if self.config.start_add_samples_steps is not None:
-                if (
-                    step > self.config.start_add_samples_steps
-                    and step % self.config.add_samples_interval == 0
-                    and step <= self.config.end_add_samples_steps
-                ):
-                    assert (
-                        "binoms" in state
-                    ), "binoms is required for relocation but missing"
-                    binoms = state["binoms"]
+        # Add multinomial samples process
+        if self.config.f_can_add_samples:
+            if (
+                step > self.config.start_add_samples_steps
+                and step % self.config.add_samples_interval == 0
+                and step <= self.config.end_add_samples_steps
+            ):
+                assert (
+                    "binoms" in state
+                ), "binoms is required in state for relocation but missing"
+                binoms = state["binoms"]
 
-                    n_new_gs = self._add_new_gs(params, optimizers, binoms)
+                n_new_gs = self._add_new_gs(params, optimizers, binoms)
 
-                    if self.config.verbose:
-                        print(f"Step {step}: {n_new_gs} GSs added")
+                if self.config.verbose:
+                    print(f"Step {step}: {n_new_gs} GSs added")
 
-            # Pruning process
-            if self.config.start_pruning_steps is not None:
-                if (
-                    step > self.config.start_pruning_steps
-                    and step % self.config.pruning_interval == 0
-                    and step <= self.config.end_pruning_steps
-                ):
+        # Pruning process
+        if self.config.f_can_prune:
+            if (
+                step > self.config.start_pruning_steps
+                and step % self.config.pruning_interval == 0
+                and step <= self.config.end_pruning_steps
+            ):
 
-                    n_prune = self._prune_gs(params, optimizers, state, step)
+                n_prune = self._prune_gs(params, optimizers, state, step)
 
-                    if self.config.verbose:
-                        print(f"Step {step}: {n_prune} GSs removed")
+                if self.config.verbose:
+                    print(f"Step {step}: {n_prune} GSs removed")
 
-            if self.config.verbose and step % 100 == 0:
-                print(f"Now having {len(params['means'])} GSs.")
+        if self.config.verbose and step % self.config.print_number_gs_every == 0:
+            print(f"Now having {len(params['means'])} GSs.")
 
-            self._reset_state(state)
+        self._reset_state(state)
 
-        if self.config.can_inject_noise:
+        if self.config.f_can_inject_noise:
             inject_noise_to_position(
                 params=params,
                 optimizers=optimizers,
@@ -163,15 +155,14 @@ class MultiStrategy(Strategy):
                 scaler=lr * self.config.noise_lr,
             )
 
-        if step < self.config.end_post_backward_steps:
-            if self.config.reset_every is not None:
-                if step % self.config.reset_every == 0:
-                    reset_opa(
-                        params=params,
-                        optimizers=optimizers,
-                        state=state,
-                        value=self.config.min_opa_prune * 2.0,
-                    )
+        if self.config.f_can_opacity_reset:
+            if step % self.config.reset_every == 0:
+                reset_opa(
+                    params=params,
+                    optimizers=optimizers,
+                    state=state,
+                    value=self.config.min_opa_prune * 2.0,
+                )
 
     def _update_state(
         self,
@@ -183,7 +174,15 @@ class MultiStrategy(Strategy):
 
         # Check for Default
         if any(
-            word in ["grad2d", "count", "radii"]
+            word
+            in [
+                "grad2d_clone",
+                "grad2d_split",
+                "count_clone",
+                "count_split",
+                "radii",
+                "sqrgrad",
+            ]
             for word in self.config.updatable_state_ids
         ):
             for key in [
@@ -201,17 +200,38 @@ class MultiStrategy(Strategy):
             else:
                 grads = info[self.config.key_for_gradient].grad.clone()
 
+            if self.config.sqrgrad:
+                sqrgrads = info["means2d"].sqrgrad.clone()
+
             grads[..., 0] *= info["width"] / 2.0 * info["n_cameras"]
             grads[..., 1] *= info["height"] / 2.0 * info["n_cameras"]
 
             # initialize state on the first run
             n_gaussian = len(list(params.values())[0])
 
-            if state["grad2d"] is None and "grad2d" in self.config.updatable_state_ids:
-                state["grad2d"] = torch.zeros(n_gaussian, device=grads.device)
+            if (
+                state["grad2d_clone"] is None
+                and "grad2d_clone" in self.config.updatable_state_ids
+            ):
+                state["grad2d_clone"] = torch.zeros(n_gaussian, device=grads.device)
 
-            if state["count"] is None and "count" in self.config.updatable_state_ids:
-                state["count"] = torch.zeros(n_gaussian, device=grads.device)
+            if (
+                state["count_clone"] is None
+                and "count_clone" in self.config.updatable_state_ids
+            ):
+                state["count_clone"] = torch.zeros(n_gaussian, device=grads.device)
+
+            if (
+                state["grad2d_split"] is None
+                and "grad2d_split" in self.config.updatable_state_ids
+            ):
+                state["grad2d_split"] = torch.zeros(n_gaussian, device=grads.device)
+
+            if (
+                state["count_split"] is None
+                and "count_split" in self.config.updatable_state_ids
+            ):
+                state["count_split"] = torch.zeros(n_gaussian, device=grads.device)
 
             if (
                 self.config.refine_scale2d_stop_iter > 0
@@ -220,6 +240,13 @@ class MultiStrategy(Strategy):
             ):
                 assert "radii" in info, "radii is required but missing."
                 state["radii"] = torch.zeros(n_gaussian, device=grads.device)
+
+            if (
+                self.config.sqrgrad
+                and state["sqrgrad"] is None
+                and "sqrgrad" in self.config.updatable_state_ids
+            ):
+                state["sqrgrad"] = torch.zeros(n_gaussian, device=grads.device)
 
             # update the running state
             if packed:
@@ -232,14 +259,27 @@ class MultiStrategy(Strategy):
                 gs_ids = torch.where(sel)[1]  # [nnz]
                 grads = grads[sel]  # [nnz, 2]
                 radii = info["radii"][sel]  # [nnz]
+                if self.config.sqrgrad:
+                    sqrgrads = sqrgrads[sel]
 
-            if "grad2d" in self.config.updatable_state_ids:
-                state["grad2d"].index_add_(0, gs_ids, grads.norm(dim=-1))
+            if "grad2d_clone" in self.config.updatable_state_ids:
+                state["grad2d_clone"].index_add_(0, gs_ids, grads.norm(dim=-1))
 
-            if "count" in self.config.updatable_state_ids:
-                state["count"].index_add_(
+            if "count_clone" in self.config.updatable_state_ids:
+                state["count_clone"].index_add_(
                     0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
                 )
+
+            if "grad2d_split" in self.config.updatable_state_ids:
+                state["grad2d_split"].index_add_(0, gs_ids, grads.norm(dim=-1))
+
+            if "count_split" in self.config.updatable_state_ids:
+                state["count_split"].index_add_(
+                    0, gs_ids, torch.ones_like(gs_ids, dtype=torch.float32)
+                )
+
+            if "sqrgrad" in self.config.updatable_state_ids:
+                state["sqrgrad"].index_add_(0, gs_ids, torch.sum(sqrgrads, dim=-1))
 
             if (
                 self.config.refine_scale2d_stop_iter > 0
@@ -261,13 +301,14 @@ class MultiStrategy(Strategy):
         step: int,
     ) -> int:
 
-        assert "count" in state, "count is required for cloning but missing."
         assert (
-            "grad2d" in state
-        ), "grad2d is required but missing for cloning but missing."
-        count = state["count"]
-        grads = state["grad2d"] / count.clamp_min(1)
-        device = grads.device
+            "count_clone" in state
+        ), "count_clone is required for cloning but missing."
+        assert (
+            "grad2d_clone" in state
+        ), "grad2d_clone is required but missing for cloning but missing."
+        count = state["count_clone"]
+        grads = state["grad2d_clone"] / count.clamp_min(1)
 
         is_grad_high = grads > self.config.grow_grad2d
         is_small = (
@@ -275,17 +316,19 @@ class MultiStrategy(Strategy):
             <= self.config.grow_scale3d * state["scene_scale"]
         )
 
-        is_cloned = is_grad_high & is_small
-        n_cloned = is_cloned.sum().item()
-        if n_cloned > 0:
+        is_clone = is_grad_high & is_small
+        n_clone = is_clone.sum().item()
+        if n_clone > 0:
             clone(
                 params=params,
                 optimizers=optimizers,
                 state=state,
-                mask=is_cloned,
+                mask=is_clone,
                 num_clones=self.config.num_cloned_gaussians,
             )
-        return n_cloned
+            state["count_clone"].zero_()
+            state["grad2d_clone"].zero_()
+        return n_clone
 
     @torch.no_grad()
     def _split_gs(
@@ -297,13 +340,14 @@ class MultiStrategy(Strategy):
         n_cloned: int = 0,
     ) -> int:
 
-        assert "count" in state, "count is required for cloning but missing."
         assert (
-            "grad2d" in state
-        ), "grad2d is required but missing for cloning but missing."
-        count = state["count"]
-        grads = state["grad2d"] / count.clamp_min(1)
-        device = grads.device
+            "count_split" in state
+        ), "count_split is required for cloning but missing."
+        assert (
+            "grad2d_split" in state
+        ), "grad2d_split is required but missing for cloning but missing."
+        count = state["count_split"]
+        grads = state["grad2d_split"] / count.clamp_min(1)
 
         is_grad_high = grads > self.config.grow_grad2d
         is_small = (
@@ -327,8 +371,10 @@ class MultiStrategy(Strategy):
                 state=state,
                 mask=is_split,
                 num_splits=self.config.num_splitted_gaussians,
-                revised_opacity=self.config.revised_opacity,
+                revised_opacity=self.config.f_revised_opacity,
             )
+            state["count_split"].zero_()
+            state["grad2d_split"].zero_()
 
         return n_split
 
@@ -361,7 +407,10 @@ class MultiStrategy(Strategy):
         binoms: Tensor,
     ) -> int:
         current_n_points = len(params["means"])
-        n_target = min(self.config.max_gaussians, int(1.05 * current_n_points))
+        n_target = min(
+            self.config.max_gaussians,
+            int((1 + self.config.add_sample_rate) * current_n_points),
+        )
         n_add = max(0, n_target - current_n_points)
         if n_add > 0:
             sample_add(
@@ -382,25 +431,46 @@ class MultiStrategy(Strategy):
         state: Dict[str, any],
         step: int,
     ) -> int:
-        is_prune = (
-            torch.sigmoid(params["opacities"].flatten()) < self.config.min_opa_prune
+
+        is_prune = torch.zeros_like(
+            params["opacities"].flatten(), dtype=torch.bool, device="cuda"
         )
-        if step > self.config.reset_every:
-
-            assert (
-                "scene_scale" in state
-            ), "scene_scale is required for pruning but missing."
-
-            is_too_big = (
-                torch.exp(params["scales"]).max(dim=-1).values
-                > self.config.prune_scale3d * state["scene_scale"]
+        if self.config.f_can_prune_if_opacity_low:
+            is_opa_low = (
+                torch.sigmoid(params["opacities"].flatten()) < self.config.min_opa_prune
             )
+            is_prune = is_prune | is_opa_low
+
+        if step > self.config.reset_every:
+            if self.config.f_can_prune_if_too_big:
+                assert (
+                    "scene_scale" in state
+                ), "scene_scale is required for pruning but missing."
+
+                is_too_big = (
+                    torch.exp(params["scales"]).max(dim=-1).values
+                    > self.config.prune_scale3d * state["scene_scale"]
+                )
 
             if step < self.config.refine_scale2d_stop_iter:
                 assert (
                     "radii" in state
                 ), "radii is required for screen-size pruning but missing"
                 is_too_big |= state["radii"] > self.config.prune_scale2d
+
+            if self.config.f_can_prune_if_sqrgrad_low:
+                if step % self.config.prune_sqrgrad_interval == 0:
+                    sqrgrad_values = state["sqrgrad"]
+
+                    threshold = torch.quantile(
+                        sqrgrad_values, self.config.prune_sqrgrad_rate
+                    )
+                    not_utilized = sqrgrad_values <= threshold
+                    n_u = not_utilized.sum().item()
+                    if self.config.verbose:
+                        print(f"Step {step}: {n_u} GSs removed by sqrgrad.")
+                    is_prune = is_prune | not_utilized
+                    state["sqrgrad"].zero_()
 
             is_prune = is_prune | is_too_big
 

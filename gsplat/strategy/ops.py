@@ -233,7 +233,7 @@ def remove(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        if isinstance(v, torch.Tensor) and k != "binoms":
+        if isinstance(v, torch.Tensor) and k not in {"binoms", "scene_scale"}:
             state[k] = v[sel]
 
 
@@ -362,8 +362,8 @@ def sample_add(
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
     for k, v in state.items():
-        v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        if isinstance(v, torch.Tensor) and k != "binoms":
+        if isinstance(v, torch.Tensor) and k not in {"binoms", "scene_scale"}:
+            v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
             state[k] = torch.cat((v, v_new))
 
 

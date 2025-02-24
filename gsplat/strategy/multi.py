@@ -223,44 +223,32 @@ class MultiStrategy(Strategy):
             # initialize state on the first run
             n_gaussian = len(list(params.values())[0])
 
-            if (
-                state["grad2d_clone"] is None
-                and "grad2d_clone" in self.config.updatable_state_ids
-            ):
-                state["grad2d_clone"] = torch.zeros(n_gaussian, device=grads.device)
+            if "grad2d_clone" in self.config.updatable_state_ids:
+                if state["grad2d_clone"] is None:
+                    state["grad2d_clone"] = torch.zeros(n_gaussian, device=grads.device)
 
-            if (
-                state["count_clone"] is None
-                and "count_clone" in self.config.updatable_state_ids
-            ):
-                state["count_clone"] = torch.zeros(n_gaussian, device=grads.device)
+            if "count_clone" in self.config.updatable_state_ids:
+                if state["count_clone"] is None:
+                    state["count_clone"] = torch.zeros(n_gaussian, device=grads.device)
 
-            if (
-                state["grad2d_split"] is None
-                and "grad2d_split" in self.config.updatable_state_ids
-            ):
-                state["grad2d_split"] = torch.zeros(n_gaussian, device=grads.device)
+            if "grad2d_split" in self.config.updatable_state_ids:
+                if state["grad2d_split"] is None:
+                    state["grad2d_split"] = torch.zeros(n_gaussian, device=grads.device)
 
-            if (
-                state["count_split"] is None
-                and "count_split" in self.config.updatable_state_ids
-            ):
-                state["count_split"] = torch.zeros(n_gaussian, device=grads.device)
+            if "count_split" in self.config.updatable_state_ids:
+                if state["count_split"] is None:
+                    state["count_split"] = torch.zeros(n_gaussian, device=grads.device)
 
-            if (
+            if "radii" in self.config.updatable_state_ids and (
                 self.config.refine_scale2d_stop_iter > 0
-                and state["radii"] is None
-                and "radii" in self.config.updatable_state_ids
             ):
-                assert "radii" in info, "radii is required but missing."
-                state["radii"] = torch.zeros(n_gaussian, device=grads.device)
+                if state["radii"] is None:
+                    assert "radii" in info, "radii is required but missing."
+                    state["radii"] = torch.zeros(n_gaussian, device=grads.device)
 
-            if (
-                self.config.sqrgrad
-                and state["sqrgrad"] is None
-                and "sqrgrad" in self.config.updatable_state_ids
-            ):
-                state["sqrgrad"] = torch.zeros(n_gaussian, device=grads.device)
+            if self.config.sqrgrad and "sqrgrad" in self.config.updatable_state_ids:
+                if state["sqrgrad"] is None:
+                    state["sqrgrad"] = torch.zeros(n_gaussian, device=grads.device)
 
             # update the running state
             if packed:
@@ -295,9 +283,8 @@ class MultiStrategy(Strategy):
             if "sqrgrad" in self.config.updatable_state_ids:
                 state["sqrgrad"].index_add_(0, gs_ids, torch.sum(sqrgrads, dim=-1))
 
-            if (
+            if "radii" in self.config.updatable_state_ids and (
                 self.config.refine_scale2d_stop_iter > 0
-                and "radii" in self.config.updatable_state_ids
             ):
                 # Should be ideally using scatter max
                 state["radii"][gs_ids] = torch.maximum(
@@ -465,13 +452,16 @@ class MultiStrategy(Strategy):
                     torch.exp(params["scales"]).max(dim=-1).values
                     > self.config.prune_scale3d * state["scene_scale"]
                 )
+                is_prune = is_prune | is_too_big
 
-            if step < self.config.refine_scale2d_stop_iter:
-                assert (
-                    "radii" in state
-                ), "radii is required for screen-size pruning but missing"
-                is_too_big |= state["radii"] > self.config.prune_scale2d
-                self._reset_state("radii", state)
+            if self.config.f_can_prune_if_too_big2d:
+                if step < self.config.refine_scale2d_stop_iter:
+                    assert (
+                        "radii" in state
+                    ), "radii is required for screen-size pruning but missing"
+                    is_too_big2d = state["radii"] > self.config.prune_scale2d
+                    self._reset_state("radii", state)
+                    is_prune = is_prune | is_too_big2d
 
             if self.config.f_can_prune_if_sqrgrad_low:
                 if step % self.config.prune_sqrgrad_interval == 0:
@@ -486,8 +476,6 @@ class MultiStrategy(Strategy):
                         print(f"Step {step}: {n_u} GSs removed by sqrgrad.")
                     is_prune = is_prune | not_utilized
                     self._reset_state("sqrgrad", state)
-
-            is_prune = is_prune | is_too_big
 
         n_prune = is_prune.sum().item()
         if n_prune > 0:

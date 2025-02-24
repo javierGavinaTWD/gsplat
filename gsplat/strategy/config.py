@@ -68,6 +68,7 @@ class DensificationStrategyConfig:
     pruning_interval: int = 0  # Interval between pruning events
     f_can_prune_if_opacity_low: bool = True  # Prune low-opacity Gaussians
     f_can_prune_if_too_big: bool = True  # Prune overly large Gaussians
+    f_can_prune_if_too_big2d: bool = False  # Prune overly large Gaussians in 2D
     f_can_prune_if_sqrgrad_low: bool = (
         False  # Prune based on squared gradient threshold
     )

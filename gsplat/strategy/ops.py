@@ -319,9 +319,9 @@ def relocate(
     # update the parameters and the state in the optimizers
     _update_param_with_optimizer(param_fn, optimizer_fn, params, optimizers)
     # update the extra running state
-    for k, v in state.items():
-        if isinstance(v, torch.Tensor):
-            v[sampled_idxs] = 0
+    # for k, v in state.items():
+    #     if isinstance(v, torch.Tensor) and k != "binoms":
+    #         v[sampled_idxs] = 0
 
 
 @torch.no_grad()
@@ -363,7 +363,7 @@ def sample_add(
     # update the extra running state
     for k, v in state.items():
         v_new = torch.zeros((len(sampled_idxs), *v.shape[1:]), device=v.device)
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and k != "binoms":
             state[k] = torch.cat((v, v_new))
 
 

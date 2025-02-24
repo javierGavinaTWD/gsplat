@@ -1,112 +1,174 @@
 import yaml
 from dataclasses import dataclass, field, asdict
-from typing import Literal, Dict, Any
+from typing import Literal, Dict, Any, List
 
 
 @dataclass
 class DensificationStrategyConfig:
+    """
+    Configuration for Gaussian Splatting Densification Strategy.
 
-    # Strategy Presets
-    strategy: Literal["default", "mcmc", "custom"] = "custom"
+    Defines parameters controlling cloning, splitting, relocation, pruning,
+    and other strategies used for Gaussian splatting.
+    """
 
-    # General Parameters
-    f_limit_gaussians: bool = True
-    max_gaussians: int = 1_000_000
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Strategy Selection
+    # ─────────────────────────────────────────────────────────
+    strategy: Literal["default", "mcmc", "custom"] = (
+        "default"  # Preset strategy selection
+    )
 
-    end_post_backward_steps: int = 25_000
+    # ─────────────────────────────────────────────────────────
+    # 🔹 General Parameters
+    # ─────────────────────────────────────────────────────────
+    f_limit_gaussians: bool = True  # Enforce a maximum limit on Gaussians
+    max_gaussians: int = 1_000_000  # Maximum number of Gaussians allowed
+    end_post_backward_steps: int = 25_000  # Total training steps before stopping
 
-    # Cloning
-    f_can_clone: bool = True
-    start_cloning_steps: int = 0
-    end_cloning_steps: int = 0
-    cloning_interval: int = 0
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Cloning Configuration
+    # ─────────────────────────────────────────────────────────
+    f_can_clone: bool = True  # Enable Gaussian cloning
+    start_cloning_steps: int = 0  # Step at which cloning starts
+    end_cloning_steps: int = 0  # Step at which cloning ends
+    cloning_interval: int = 0  # Interval between cloning events
 
-    # Splitting
-    f_can_split: bool = True
-    start_splitting_steps: int = 0
-    end_splitting_steps: int = 0
-    splitting_interval: int = 0
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Splitting Configuration
+    # ─────────────────────────────────────────────────────────
+    f_can_split: bool = True  # Enable Gaussian splitting
+    start_splitting_steps: int = 0  # Step at which splitting starts
+    end_splitting_steps: int = 0  # Step at which splitting ends
+    splitting_interval: int = 0  # Interval between splitting events
+    f_revised_opacity: bool = False  # Apply revised opacity computation on split
 
-    f_revised_opacity: bool = False
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Relocation Configuration
+    # ─────────────────────────────────────────────────────────
+    f_can_relocate: bool = True  # Enable Gaussian relocation
+    start_relocation_steps: int = 0  # Step at which relocation starts
+    end_relocation_steps: int = 0  # Step at which relocation ends
+    relocation_interval: int = 0  # Interval between relocation events
 
-    # Relocation
-    f_can_relocate: bool = True
-    start_relocation_steps: int = 0
-    end_relocation_steps: int = 0
-    relocation_interval: int = 0
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Adding New Samples
+    # ─────────────────────────────────────────────────────────
+    f_can_add_samples: bool = True  # Enable adding new Gaussian samples
+    start_add_samples_steps: int = 0  # Step at which sample addition starts
+    end_add_samples_steps: int = 0  # Step at which sample addition ends
+    add_samples_interval: int = 0  # Interval between sample addition events
 
-    # Adding samples
-    f_can_add_samples: bool = True
-    start_add_samples_steps: int = 0
-    end_add_samples_steps: int = 0
-    add_samples_interval: int = 0
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Pruning Configuration
+    # ─────────────────────────────────────────────────────────
+    f_can_prune: bool = True  # Enable pruning of Gaussians
+    start_pruning_steps: int = 0  # Step at which pruning starts
+    end_pruning_steps: int = 0  # Step at which pruning ends
+    pruning_interval: int = 0  # Interval between pruning events
+    f_can_prune_if_opacity_low: bool = True  # Prune low-opacity Gaussians
+    f_can_prune_if_too_big: bool = True  # Prune overly large Gaussians
+    f_can_prune_if_sqrgrad_low: bool = (
+        False  # Prune based on squared gradient threshold
+    )
+    prune_sqrgrad_interval: int = 10_000  # Interval for squared gradient pruning
+    prune_sqrgrad_rate: float = 0.80  # Threshold for squared gradient pruning
 
-    # Pruning
-    f_can_prune: bool = True
-    start_pruning_steps: int = 0
-    end_pruning_steps: int = 0
-    pruning_interval: int = 0
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Opacity Reset Configuration
+    # ─────────────────────────────────────────────────────────
+    f_can_opacity_reset: bool = True  # Enable opacity reset
+    start_opacity_reset_steps: int = 0  # Step at which opacity reset starts
+    end_opacity_reset_steps: int = 0  # Step at which opacity reset ends
+    opacity_reset_interval: int = 0  # Interval between opacity resets
 
-    f_can_prune_if_opacity_low: bool = True
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Noise Injection Configuration
+    # ─────────────────────────────────────────────────────────
+    f_can_inject_noise: bool = True  # Enable noise injection
+    start_inject_noise_steps: int = 0  # Step at which noise injection starts
+    end_inject_noise_steps: int = 0  # Step at which noise injection ends
+    inject_noise_interval: int = 0  # Interval between noise injections
 
-    f_can_prune_if_too_big: bool = True
-
-    f_can_prune_if_sqrgrad_low: bool = False
-    prune_sqrgrad_interval: int = 10000
-    prune_sqrgrad_rate: float = 0.80
-
-    # Opacity Reset
-    f_can_opacity_reset: bool = True
-    start_opacity_reset_steps: int = 0
-    end_opacity_reset_steps: int = 0
-    opacity_reset_interval: int = 0
-
-    # Noise Injection
-    f_can_inject_noise: bool = True
-    start_inject_noise_steps: int = 0
-    end_inject_noise_steps: int = 0
-    inject_noise_interval: int = 0
-
-    # State Management
-    initialized_state_ids: list[
-        Literal["grad2d", "count", "radii", "scene_scale", "binoms", "sqrgrad"]
+    # ─────────────────────────────────────────────────────────
+    # 🔹 State Management
+    # ─────────────────────────────────────────────────────────
+    initialized_state_ids: List[
+        Literal[
+            "grad2d_clone",
+            "grad2d_split",
+            "count_clone",
+            "count_split",
+            "radii",
+            "scene_scale",
+            "binoms",
+            "sqrgrad",
+        ]
     ] = field(default_factory=list)
-    updatable_state_ids: list[
-        Literal["grad2d", "count", "radii", "scene_scale", "binoms", "sqrgrad"]
+    updatable_state_ids: List[
+        Literal[
+            "grad2d_clone",
+            "grad2d_split",
+            "count_clone",
+            "count_split",
+            "radii",
+            "scene_scale",
+            "binoms",
+            "sqrgrad",
+        ]
     ] = field(default_factory=list)
-    resetable_state_ids: list[
-        Literal["grad2d", "count", "radii", "scene_scale", "binoms", "sqrgrad"]
+    resetable_state_ids: List[
+        Literal[
+            "grad2d_clone",
+            "grad2d_split",
+            "count_clone",
+            "count_split",
+            "radii",
+            "scene_scale",
+            "binoms",
+            "sqrgrad",
+        ]
     ] = field(default_factory=list)
 
-    # Debugging
-    verbose: bool = False
-    print_number_gs_every: int = 100
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Debugging & Logging
+    # ─────────────────────────────────────────────────────────
+    verbose: bool = False  # Enable verbose logging
+    print_number_gs_every: int = 100  # Print Gaussian count every N steps
 
-    # Strategy-Specific Flags
-    absgrad: bool = False
-    sqrgrad: bool = False
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Strategy-Specific Flags
+    # ─────────────────────────────────────────────────────────
+    absgrad: bool = False  # Use absolute gradient
+    sqrgrad: bool = False  # Use squared gradient
+    key_for_gradient: Literal["means2d", "gradient_2dgs"] = (
+        "means2d"  # Gradient selection
+    )
 
-    # Gradient Configuration
-    key_for_gradient: Literal["means2d", "gradient_2dgs"] = "means2d"
+    # ─────────────────────────────────────────────────────────
+    # 🔹 Pruning & Splitting Configuration
+    # ─────────────────────────────────────────────────────────
+    min_opa_prune: float = 0.005  # Minimum opacity threshold for pruning
+    grow_grad2d: float = 0.0002  # Growth rate for 2D gradients
+    grow_scale3d: float = 0.01  # Growth rate for 3D scaling
+    grow_scale2d: float = 0.05  # Growth rate for 2D scaling
+    prune_scale3d: float = 0.1  # Scale pruning threshold (3D)
+    prune_scale2d: float = 0.15  # Scale pruning threshold (2D)
+    refine_scale2d_stop_iter: int = 0  # Stop refinement after this iteration
+    prune_warmup_steps: int = (
+        3_000  # Number of warmup steps before pruning by scale or score
+    )
+    pause_refine_after_reset: int = 0  # Pause refinement after a reset
+    num_splitted_gaussians: int = 2  # Number of Gaussians created per split
+    num_cloned_gaussians: int = 2  # Number of Gaussians created per clone
 
-    # Pruning & Splitting Configuration
-    min_opa_prune: float = 0.005
-    grow_grad2d: float = 0.0002
-    grow_scale3d: float = 0.01
-    grow_scale2d: float = 0.05
-    prune_scale3d: float = 0.1
-    prune_scale2d: float = 0.15
-    refine_scale2d_stop_iter: int = 0
-    reset_every: int = 3000
-    pause_refine_after_reset: int = 0
-    num_splitted_gaussians: int = 2
-    num_cloned_gaussians: int = 2
-
-    # MCMC-Specific Parameters
-    noise_lr: float = 5e5
-    n_max_binoms: int = 51
-    min_opa_relocate: float = 0.005
-    add_sample_rate: float = 0.05
+    # ─────────────────────────────────────────────────────────
+    # 🔹 MCMC-Specific Parameters
+    # ─────────────────────────────────────────────────────────
+    noise_lr: float = 5e5  # Learning rate for noise
+    n_max_binoms: int = 51  # Maximum number of binomial samples
+    min_opa_relocate: float = 0.005  # Minimum opacity for relocation
+    add_sample_rate: float = 0.05  # Sample addition rate
 
     def apply_strategy_defaults(self, overrides: Dict[str, Any] = None):
         """Set default values for the selected strategy and override with user-defined values."""
@@ -116,6 +178,7 @@ class DensificationStrategyConfig:
 
         strategy_defaults = {
             "default": {
+                # Feature Flags
                 "f_limit_gaussians": False,
                 "f_can_clone": True,
                 "f_can_split": True,
@@ -124,6 +187,7 @@ class DensificationStrategyConfig:
                 "f_can_prune_if_opacity_low": True,
                 "f_can_prune_if_too_big": True,
                 "f_can_opacity_reset": True,
+                # Thresholds & Scaling Factors
                 "min_opa_prune": 0.005,
                 "grow_grad2d": 0.0002,
                 "grow_scale3d": 0.01,
@@ -131,6 +195,7 @@ class DensificationStrategyConfig:
                 "prune_scale3d": 0.1,
                 "prune_scale2d": 0.15,
                 "refine_scale2d_stop_iter": 0,
+                # Step Control
                 "end_post_backward_steps": 15_000,
                 "start_cloning_steps": 500,
                 "end_cloning_steps": 15_000,
@@ -141,13 +206,19 @@ class DensificationStrategyConfig:
                 "start_pruning_steps": 500,
                 "end_pruning_steps": 15_000,
                 "pruning_interval": 100,
-                "reset_every": 3000,
+                "start_opacity_reset_steps": 3000,
+                "end_opacity_reset_steps": 15_000,
+                "opacity_reset_interval": 3000,
+                "prune_warmup_steps": 3_000,
                 "pause_refine_after_reset": 0,
-                "absgrad": False,
-                "sqrgrad": False,
+                # Logging & Debugging
                 "verbose": False,
                 "print_number_gs_every": 100,
+                # Gradient Options
+                "absgrad": False,
+                "sqrgrad": False,
                 "key_for_gradient": "means2d",
+                # State Management
                 "initialized_state_ids": [
                     "grad2d_clone",
                     "count_clone",
@@ -161,29 +232,45 @@ class DensificationStrategyConfig:
                     "grad2d_split",
                     "count_split",
                 ],
-                "resetable_state_ids": [],
+                "resetable_state_ids": [
+                    "grad2d_clone",
+                    "count_clone",
+                    "grad2d_split",
+                    "count_split",
+                ],
+                # Gaussian Properties
                 "num_splitted_gaussians": 2,
                 "num_cloned_gaussians": 2,
             },
             "mcmc": {
-                "max_gaussians": 1_000_000,
-                "noise_lr": 5e5,
-                "end_post_backward_steps": 25_000,
+                # Feature Flags
+                "f_limit_gaussians": True,
                 "f_can_relocate": True,
+                "f_can_add_samples": True,
+                "f_can_inject_noise": True,
+                # Limits & Constraints
+                "max_gaussians": 1_000_000,
+                "min_opa_relocate": 0.005,
+                "n_max_binoms": 51,
+                # Learning Rates
+                "noise_lr": 5e5,
+                # Step Control
+                "end_post_backward_steps": 25_000,
                 "start_relocation_steps": 500,
                 "end_relocation_steps": 25_000,
                 "relocation_interval": 100,
-                "f_can_add_samples": True,
                 "start_add_samples_steps": 500,
                 "end_add_samples_steps": 25_000,
                 "add_samples_interval": 100,
+                "start_inject_noise_steps": 500,
+                "end_inject_noise_steps": 25_000,
+                "inject_noise_interval": 100,
                 "add_sample_rate": 0.05,
-                "min_opa_relocate": 0.005,
-                "n_max_binoms": 51,
+                # State Management
                 "initialized_state_ids": ["binoms"],
-                "can_inject_noise": True,
                 "updatable_state_ids": [],
                 "resetable_state_ids": [],
+                # Logging
                 "print_number_gs_every": 100,
             },
         }

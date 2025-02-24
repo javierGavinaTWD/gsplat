@@ -72,7 +72,10 @@ class MultiStrategy(Strategy):
         self._update_state(params, state, info, packed=packed)
 
         # Cloning process
-        if self.config.f_can_clone:
+        if self.config.f_can_clone and (
+            not self.config.f_limit_gaussians
+            or len(params["means"]) < self.config.max_gaussians
+        ):
             if (
                 step > self.config.start_cloning_steps
                 and step % self.config.cloning_interval == 0
@@ -84,7 +87,10 @@ class MultiStrategy(Strategy):
                     print(f"Step {step}: {n_cloned} GSs cloned")
 
         # Splitting process
-        if self.config.f_can_split:
+        if self.config.f_can_split and (
+            not self.config.f_limit_gaussians
+            or len(params["means"]) < self.config.max_gaussians
+        ):
             if (
                 step > self.config.start_splitting_steps
                 and step % self.config.splitting_interval == 0
@@ -105,15 +111,17 @@ class MultiStrategy(Strategy):
                 assert (
                     "binoms" in state
                 ), "binoms is required for relocation but missing"
-                binoms = state["binoms"]
 
-                n_relocated = self._relocate_gs(params, optimizers, binoms)
+                n_relocated = self._relocate_gs(params, optimizers, state)
 
                 if self.config.verbose:
                     print(f"Step {step}: {n_relocated} GSs relocated")
 
         # Add multinomial samples process
-        if self.config.f_can_add_samples:
+        if self.config.f_can_add_samples and (
+            not self.config.f_limit_gaussians
+            or len(params["means"]) < self.config.max_gaussians
+        ):
             if (
                 step > self.config.start_add_samples_steps
                 and step % self.config.add_samples_interval == 0
@@ -122,9 +130,8 @@ class MultiStrategy(Strategy):
                 assert (
                     "binoms" in state
                 ), "binoms is required in state for relocation but missing"
-                binoms = state["binoms"]
 
-                n_new_gs = self._add_new_gs(params, optimizers, binoms)
+                n_new_gs = self._add_new_gs(params, optimizers, state)
 
                 if self.config.verbose:
                     print(f"Step {step}: {n_new_gs} GSs added")
@@ -145,18 +152,25 @@ class MultiStrategy(Strategy):
         if self.config.verbose and step % self.config.print_number_gs_every == 0:
             print(f"Now having {len(params['means'])} GSs.")
 
-        self._reset_state(state)
-
         if self.config.f_can_inject_noise:
-            inject_noise_to_position(
-                params=params,
-                optimizers=optimizers,
-                state={},
-                scaler=lr * self.config.noise_lr,
-            )
+            if (
+                step > self.config.start_inject_noise_steps
+                and step % self.config.inject_noise_interval == 0
+                and step <= self.config.end_inject_noise_steps
+            ):
+                inject_noise_to_position(
+                    params=params,
+                    optimizers=optimizers,
+                    state={},
+                    scaler=lr * self.config.noise_lr,
+                )
 
         if self.config.f_can_opacity_reset:
-            if step % self.config.reset_every == 0:
+            if (
+                step > self.config.start_opacity_reset_steps
+                and step % self.config.opacity_reset_interval == 0
+                and step <= self.config.end_opacity_reset_steps
+            ):
                 reset_opa(
                     params=params,
                     optimizers=optimizers,
@@ -326,8 +340,8 @@ class MultiStrategy(Strategy):
                 mask=is_clone,
                 num_clones=self.config.num_cloned_gaussians,
             )
-            state["count_clone"].zero_()
-            state["grad2d_clone"].zero_()
+            self._reset_state("grad2d_clone", state)
+            self._reset_state("count_clone", state)
         return n_clone
 
     @torch.no_grad()
@@ -373,8 +387,8 @@ class MultiStrategy(Strategy):
                 num_splits=self.config.num_splitted_gaussians,
                 revised_opacity=self.config.f_revised_opacity,
             )
-            state["count_split"].zero_()
-            state["grad2d_split"].zero_()
+            self._reset_state("count_split", state)
+            self._reset_state("grad2d_split", state)
 
         return n_split
 
@@ -383,7 +397,7 @@ class MultiStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: Tensor,
+        state: Dict[str, any],
     ) -> int:
         opacities = torch.sigmoid(params["opacities"].flatten())
         dead_mask = opacities <= self.config.min_opa_relocate
@@ -392,9 +406,9 @@ class MultiStrategy(Strategy):
             relocate(
                 params=params,
                 optimizers=optimizers,
-                state={},
+                state=state,
                 mask=dead_mask,
-                binoms=binoms,
+                binoms=state["binoms"],
                 min_opacity=self.config.min_opa_relocate,
             )
         return n_relocate
@@ -404,7 +418,7 @@ class MultiStrategy(Strategy):
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],
         optimizers: Dict[str, torch.optim.Optimizer],
-        binoms: Tensor,
+        state: Dict[str, any],
     ) -> int:
         current_n_points = len(params["means"])
         n_target = min(
@@ -416,9 +430,9 @@ class MultiStrategy(Strategy):
             sample_add(
                 params=params,
                 optimizers=optimizers,
-                state={},
+                state=state,
                 n=n_add,
-                binoms=binoms,
+                binoms=state["binoms"],
                 min_opacity=self.config.min_opa_relocate,
             )
         return n_add
@@ -441,7 +455,7 @@ class MultiStrategy(Strategy):
             )
             is_prune = is_prune | is_opa_low
 
-        if step > self.config.reset_every:
+        if step > self.config.prune_warmup_steps:
             if self.config.f_can_prune_if_too_big:
                 assert (
                     "scene_scale" in state
@@ -457,6 +471,7 @@ class MultiStrategy(Strategy):
                     "radii" in state
                 ), "radii is required for screen-size pruning but missing"
                 is_too_big |= state["radii"] > self.config.prune_scale2d
+                self._reset_state("radii", state)
 
             if self.config.f_can_prune_if_sqrgrad_low:
                 if step % self.config.prune_sqrgrad_interval == 0:
@@ -470,7 +485,7 @@ class MultiStrategy(Strategy):
                     if self.config.verbose:
                         print(f"Step {step}: {n_u} GSs removed by sqrgrad.")
                     is_prune = is_prune | not_utilized
-                    state["sqrgrad"].zero_()
+                    self._reset_state("sqrgrad", state)
 
             is_prune = is_prune | is_too_big
 
@@ -480,8 +495,7 @@ class MultiStrategy(Strategy):
 
         return n_prune
 
-    def _reset_state(self, state: Dict[str, any]):
-        for state_id in self.config.resetable_state_ids:
-            if state_id in state:
-                state[state_id].zero_()
-        torch.cuda.empty_cache()
+    def _reset_state(self, state_id: str, state: Dict[str, any]):
+        if state_id in self.config.resetable_state_ids and state_id in state:
+            state[state_id].zero_()
+            torch.cuda.empty_cache()

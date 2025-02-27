@@ -69,6 +69,9 @@ class DensificationStrategyConfig:
     f_can_prune_if_opacity_low: bool = True  # Prune low-opacity Gaussians
     f_can_prune_if_too_big: bool = True  # Prune overly large Gaussians
     f_can_prune_if_too_big2d: bool = False  # Prune overly large Gaussians in 2D
+    prune_warmup_steps: int = (
+        3_000  # Number of warmup steps before pruning by scale or score
+    )
     f_can_prune_if_sqrgrad_low: bool = (
         False  # Prune based on squared gradient threshold
     )
@@ -156,9 +159,6 @@ class DensificationStrategyConfig:
     prune_scale3d: float = 0.1  # Scale pruning threshold (3D)
     prune_scale2d: float = 0.15  # Scale pruning threshold (2D)
     refine_scale2d_stop_iter: int = 0  # Stop refinement after this iteration
-    prune_warmup_steps: int = (
-        3_000  # Number of warmup steps before pruning by scale or score
-    )
     pause_refine_after_reset: int = 0  # Pause refinement after a reset
     num_splitted_gaussians: int = 2  # Number of Gaussians created per split
     num_cloned_gaussians: int = 2  # Number of Gaussians created per clone

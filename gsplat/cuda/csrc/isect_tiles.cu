@@ -30,6 +30,7 @@ __global__ void isect_tiles(
     const T *__restrict__ depths,      // [C, N] or [nnz]
     const T *__restrict__ conics,
     const T *__restrict__ opacities,
+    const bool use_snugbox_accutile,
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
     const uint32_t tile_size,
     const uint32_t tile_width,
@@ -49,41 +50,84 @@ __global__ void isect_tiles(
         return;
     }
 
-    // Conics
-    const float4 con_o = {
-        static_cast<float>(conics[3 * idx]),
-        static_cast<float>(conics[3 * idx + 1]),
-        static_cast<float>(conics[3 * idx + 2]),
-        static_cast<float>(opacities[idx])
-    };
+    if (use_snugbox_accutile) {
+        // Conics
+        const float4 con_o = {
+            static_cast<float>(conics[3 * idx]),
+            static_cast<float>(conics[3 * idx + 1]),
+            static_cast<float>(conics[3 * idx + 2]),
+            static_cast<float>(opacities[idx])
+        };
 
-    const OpT radius = radii[idx];
-    if (radius <= 0) {
-        if (first_pass) {
-            tiles_per_gauss[idx] = 0;
+        const OpT radius = radii[idx];
+        if (radius <= 0) {
+            if (first_pass) {
+                tiles_per_gauss[idx] = 0;
+            }
+            return;
         }
-        return;
-    }
 
-    vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
+        vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
 
-    TileBounds bounds = duplicateToTilesTouched(
-        {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
-        con_o,
-        tile_width,
-        tile_height
-    );
-    int2 rect_min = bounds.rect_min;
-    int2 rect_max = bounds.rect_max;
-    float2 bbox_argmin = bounds.bbox_argmin;
-    float2 bbox_argmax = bounds.bbox_argmax;
-    float2 bbox_min = bounds.bbox_min;
-    float2 bbox_max = bounds.bbox_max;
-    float disc = bounds.disc;
-    float t = bounds.t;
+        TileBounds bounds = duplicateToTilesTouched(
+            {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
+            con_o,
+            tile_width,
+            tile_height
+        );
+        int2 rect_min = bounds.rect_min;
+        int2 rect_max = bounds.rect_max;
+        float2 bbox_argmin = bounds.bbox_argmin;
+        float2 bbox_argmax = bounds.bbox_argmax;
+        float2 bbox_min = bounds.bbox_min;
+        float2 bbox_max = bounds.bbox_max;
+        float disc = bounds.disc;
+        float t = bounds.t;
 
-    if (first_pass) {
-        uint32_t first_n_tiles = processTiles(
+        if (first_pass) {
+            uint32_t first_n_tiles = processTiles(
+                con_o,
+                disc,
+                t,
+                {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
+                bbox_min,
+                bbox_max,
+                bbox_argmin,
+                bbox_argmax,
+                rect_min,
+                rect_max,
+                tile_size,
+                tile_width,
+                tile_height,
+                0,
+                0,
+                0,
+                0,
+                nullptr,
+                nullptr
+            );
+            tiles_per_gauss[idx] = static_cast<int32_t>(first_n_tiles);
+            return;
+        }
+
+        int64_t cid; // camera id
+        if (packed) {
+            // parallelize over nnz
+            cid = camera_ids[idx];
+            // gid = gaussian_ids[idx];
+        } else {
+            // parallelize over C * N
+            cid = idx / N;
+            // gid = idx % N;
+        }
+        const int64_t cid_enc = cid << (32 + tile_n_bits);
+
+        int64_t depth_id_enc = static_cast<int64_t>(
+            __ldg(reinterpret_cast<const int32_t *>(&depths[idx]))
+        );
+        int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
+
+        uint32_t tiles_touched = processTiles(
             con_o,
             disc,
             t,
@@ -97,55 +141,73 @@ __global__ void isect_tiles(
             tile_size,
             tile_width,
             tile_height,
-            0,
-            0,
-            0,
-            0,
-            nullptr,
-            nullptr
+            idx,
+            cur_idx,
+            cid_enc,
+            depth_id_enc,
+            isect_ids,
+            flatten_ids
         );
-        tiles_per_gauss[idx] = static_cast<int32_t>(first_n_tiles);
-        return;
-    }
-
-    int64_t cid; // camera id
-    if (packed) {
-        // parallelize over nnz
-        cid = camera_ids[idx];
-        // gid = gaussian_ids[idx];
     } else {
-        // parallelize over C * N
-        cid = idx / N;
-        // gid = idx % N;
+        const OpT radius = radii[idx];
+        if (radius <= 0) {
+            if (first_pass) {
+                tiles_per_gauss[idx] = 0;
+            }
+            return;
+        }
+
+        vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
+
+        OpT tile_radius = radius / static_cast<OpT>(tile_size);
+        OpT tile_x = mean2d.x / static_cast<OpT>(tile_size);
+        OpT tile_y = mean2d.y / static_cast<OpT>(tile_size);
+
+        // tile_min is inclusive, tile_max is exclusive
+        uint2 tile_min, tile_max;
+        tile_min.x =
+            min(max(0, (uint32_t)floor(tile_x - tile_radius)), tile_width);
+        tile_min.y =
+            min(max(0, (uint32_t)floor(tile_y - tile_radius)), tile_height);
+        tile_max.x =
+            min(max(0, (uint32_t)ceil(tile_x + tile_radius)), tile_width);
+        tile_max.y =
+            min(max(0, (uint32_t)ceil(tile_y + tile_radius)), tile_height);
+
+        if (first_pass) {
+            // first pass only writes out tiles_per_gauss
+            tiles_per_gauss[idx] = static_cast<int32_t>(
+                (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x)
+            );
+            return;
+        }
+
+        int64_t cid; // camera id
+        if (packed) {
+            // parallelize over nnz
+            cid = camera_ids[idx];
+            // gid = gaussian_ids[idx];
+        } else {
+            // parallelize over C * N
+            cid = idx / N;
+            // gid = idx % N;
+        }
+        const int64_t cid_enc = cid << (32 + tile_n_bits);
+
+        int64_t depth_id_enc = (int64_t)*(int32_t *)&(depths[idx]);
+        int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
+        for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
+            for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+                int64_t tile_id = i * tile_width + j;
+                // e.g. tile_n_bits = 22:
+                // camera id (10 bits) | tile id (22 bits) | depth (32 bits)
+                isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
+                // the flatten index in [C * N] or [nnz]
+                flatten_ids[cur_idx] = static_cast<int32_t>(idx);
+                ++cur_idx;
+            }
+        }
     }
-    const int64_t cid_enc = cid << (32 + tile_n_bits);
-
-    int64_t depth_id_enc = static_cast<int64_t>(
-        __ldg(reinterpret_cast<const int32_t *>(&depths[idx]))
-    );
-    int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-
-    uint32_t tiles_touched = processTiles(
-        con_o,
-        disc,
-        t,
-        {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
-        bbox_min,
-        bbox_max,
-        bbox_argmin,
-        bbox_argmax,
-        rect_min,
-        rect_max,
-        tile_size,
-        tile_width,
-        tile_height,
-        idx,
-        cur_idx,
-        cid_enc,
-        depth_id_enc,
-        isect_ids,
-        flatten_ids
-    );
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
@@ -161,7 +223,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     const uint32_t tile_width,
     const uint32_t tile_height,
     const bool sort,
-    const bool double_buffer
+    const bool double_buffer,
+    const bool use_snugbox_accutile
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -185,7 +248,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
         total_elems = nnz;
         TORCH_CHECK(
             camera_ids.has_value() && gaussian_ids.has_value(),
-            "When packed is set, camera_ids and gaussian_ids must be provided."
+            "When packed is set, camera_ids and gaussian_ids must be "
+            "provided."
         );
         camera_ids_ptr = camera_ids.value().data_ptr<int64_t>();
         gaussian_ids_ptr = gaussian_ids.value().data_ptr<int64_t>();
@@ -203,8 +267,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     // uint32_t cam_n_bits = std::bit_width(C);
     uint32_t tile_n_bits = (uint32_t)floor(log2(n_tiles)) + 1;
     uint32_t cam_n_bits = (uint32_t)floor(log2(C)) + 1;
-    // the first 32 bits are used for the camera id and tile id altogether, so
-    // check if we have enough bits for them.
+    // the first 32 bits are used for the camera id and tile id altogether,
+    // so check if we have enough bits for them.
     assert(tile_n_bits + cam_n_bits <= 32);
 
     // first pass: compute number of tiles per gaussian
@@ -236,6 +300,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     depths.data_ptr<scalar_t>(),
                     conics.data_ptr<scalar_t>(),
                     opacities.data_ptr<scalar_t>(),
+                    use_snugbox_accutile,
                     nullptr,
                     tile_size,
                     tile_width,
@@ -281,6 +346,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
                     depths.data_ptr<scalar_t>(),
                     conics.data_ptr<scalar_t>(),
                     opacities.data_ptr<scalar_t>(),
+                    use_snugbox_accutile,
                     cum_tiles_per_gauss.data_ptr<int64_t>(),
                     tile_size,
                     tile_width,
@@ -300,9 +366,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
         torch::Tensor flatten_ids_sorted = torch::empty_like(flatten_ids);
 
         // https://nvidia.github.io/cccl/cub/api/structcub_1_1DeviceRadixSort.html
-        // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to O(P)
+        // DoubleBuffer reduce the auxiliary memory usage from O(N+P) to
+        // O(P)
         if (double_buffer) {
-            // Create a set of DoubleBuffers to wrap pairs of device pointers
+            // Create a set of DoubleBuffers to wrap pairs of device
+            // pointers
             cub::DoubleBuffer<int64_t> d_keys(
                 isect_ids.data_ptr<int64_t>(),
                 isect_ids_sorted.data_ptr<int64_t>()
@@ -334,9 +402,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
             case 1: // sorted items are stored in flatten_ids_sorted
                 break;
             }
-            // printf("DoubleBuffer d_keys selector: %d\n", d_keys.selector);
-            // printf("DoubleBuffer d_values selector: %d\n",
-            // d_values.selector);
+            // printf("DoubleBuffer d_keys selector: %d\n",
+            // d_keys.selector); printf("DoubleBuffer d_values selector:
+            // %d\n", d_values.selector);
         } else {
             GSPLAT_CUB_WRAPPER(
                 cub::DeviceRadixSort::SortPairs,

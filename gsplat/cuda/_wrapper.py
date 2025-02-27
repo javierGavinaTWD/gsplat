@@ -354,6 +354,7 @@ def isect_tiles(
     n_cameras: Optional[int] = None,
     camera_ids: Optional[Tensor] = None,
     gaussian_ids: Optional[Tensor] = None,
+    use_snugbox_accutile: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Maps projected Gaussians to intersecting tiles.
 
@@ -417,6 +418,7 @@ def isect_tiles(
         tile_height,
         sort,
         True,  # DoubleBuffer: memory efficient radixsort
+        use_snugbox_accutile,
     )
     return tiles_per_gauss, isect_ids, flatten_ids
 

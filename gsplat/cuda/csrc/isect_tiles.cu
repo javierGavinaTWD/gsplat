@@ -1,6 +1,6 @@
 #include "bindings.h"
-#include "types.cuh"
 #include "gaussian_ops.cuh"
+#include "types.cuh"
 #include <cooperative_groups.h>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
@@ -25,9 +25,9 @@ __global__ void isect_tiles(
     const int64_t *__restrict__ camera_ids,   // [nnz] optional
     const int64_t *__restrict__ gaussian_ids, // [nnz] optional
     // data
-    const T *__restrict__ means2d,                   // [C, N, 2] or [nnz, 2]
-    const int32_t *__restrict__ radii,               // [C, N] or [nnz]
-    const T *__restrict__ depths,                    // [C, N] or [nnz]
+    const T *__restrict__ means2d,     // [C, N, 2] or [nnz, 2]
+    const int32_t *__restrict__ radii, // [C, N] or [nnz]
+    const T *__restrict__ depths,      // [C, N] or [nnz]
     const T *__restrict__ conics,
     const T *__restrict__ opacities,
     const int64_t *__restrict__ cum_tiles_per_gauss, // [C, N] or [nnz]
@@ -51,10 +51,10 @@ __global__ void isect_tiles(
 
     // Conics
     const float4 con_o = {
-        conics[3 * idx],
-        conics[3 * idx + 1],
-        conics[3 * idx + 2],
-        opacities[idx]
+        static_cast<float>(conics[3 * idx]),
+        static_cast<float>(conics[3 * idx + 1]),
+        static_cast<float>(conics[3 * idx + 2]),
+        static_cast<float>(opacities[idx])
     };
 
     const OpT radius = radii[idx];
@@ -65,21 +65,46 @@ __global__ void isect_tiles(
         return;
     }
 
-    
-
     vec2<OpT> mean2d = glm::make_vec2(means2d + 2 * idx);
 
     TileBounds bounds = duplicateToTilesTouched(
-        {mean2d.x, mean2d.y}, con_o, tile_width, tile_height
+        {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
+        con_o,
+        tile_width,
+        tile_height
     );
     int2 rect_min = bounds.rect_min;
     int2 rect_max = bounds.rect_max;
+    float2 bbox_argmin = bounds.bbox_argmin;
+    float2 bbox_argmax = bounds.bbox_argmax;
+    float2 bbox_min = bounds.bbox_min;
+    float2 bbox_max = bounds.bbox_max;
+    float disc = bounds.disc;
+    float t = bounds.t;
 
     if (first_pass) {
-        // first pass only writes out tiles_per_gauss
-        tiles_per_gauss[idx] = static_cast<int32_t>(
-            (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x)
+        uint32_t first_n_tiles = processTiles(
+            con_o,
+            disc,
+            t,
+            {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
+            bbox_min,
+            bbox_max,
+            bbox_argmin,
+            bbox_argmax,
+            rect_min,
+            rect_max,
+            tile_size,
+            tile_width,
+            tile_height,
+            0,
+            0,
+            0,
+            0,
+            nullptr,
+            nullptr
         );
+        tiles_per_gauss[idx] = static_cast<int32_t>(first_n_tiles);
         return;
     }
 
@@ -100,28 +125,35 @@ __global__ void isect_tiles(
     );
     int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
 
-    // Precompute common values outside loops
-    int32_t rect_width = rect_max.x - rect_min.x;
-    int32_t rect_height = rect_max.y - rect_min.y;
-
-    // Reduce computations in the inner loop
-    for (int32_t i = 0; i < rect_height; ++i) {
-        int64_t row_base_tile_id = (rect_min.y + i) * tile_width + rect_min.x;
-        for (int32_t j = 0; j < rect_width; ++j) {
-            int64_t tile_id = row_base_tile_id + j;
-            isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
-            flatten_ids[cur_idx] = static_cast<int32_t>(idx);
-            ++cur_idx;
-        }
-    }
+    uint32_t tiles_touched = processTiles(
+        con_o,
+        disc,
+        t,
+        {static_cast<float>(mean2d.x), static_cast<float>(mean2d.y)},
+        bbox_min,
+        bbox_max,
+        bbox_argmin,
+        bbox_argmax,
+        rect_min,
+        rect_max,
+        tile_size,
+        tile_width,
+        tile_height,
+        idx,
+        cur_idx,
+        cid_enc,
+        depth_id_enc,
+        isect_ids,
+        flatten_ids
+    );
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
-    const torch::Tensor &means2d,                    // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &radii,                      // [C, N] or [nnz]
+    const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &radii,   // [C, N] or [nnz]
     const torch::Tensor &depths,
     const torch::Tensor &conics,                     // [C, N, 4, 4]
-    const torch::Tensor &opacities,                    // [C, N] or [nnz]
+    const torch::Tensor &opacities,                  // [C, N] or [nnz]
     const at::optional<torch::Tensor> &camera_ids,   // [nnz]
     const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
     const uint32_t C,

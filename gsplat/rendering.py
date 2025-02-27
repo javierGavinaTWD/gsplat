@@ -50,6 +50,7 @@ def rasterization(
     distributed: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
+    use_snugbox_accutile: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -506,6 +507,7 @@ def rasterization(
         n_cameras=C,
         camera_ids=camera_ids,
         gaussian_ids=gaussian_ids,
+        use_snugbox_accutile=use_snugbox_accutile,
     )
     # print("rank", world_rank, "Before isect_offset_encode")
     isect_offsets = isect_offset_encode(isect_ids, C, tile_width, tile_height)

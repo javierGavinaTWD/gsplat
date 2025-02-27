@@ -31,8 +31,7 @@
 
 namespace gsplat {
 
-enum CameraModelType
-{
+enum CameraModelType {
     PINHOLE = 0,
     ORTHO = 1,
     FISHEYE = 2,
@@ -145,11 +144,11 @@ fully_fused_projection_bwd_tensor(
 );
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
-    const torch::Tensor &means2d,                    // [C, N, 2] or [nnz, 2]
-    const torch::Tensor &radii,                      // [C, N] or [nnz]
+    const torch::Tensor &means2d, // [C, N, 2] or [nnz, 2]
+    const torch::Tensor &radii,   // [C, N] or [nnz]
     const torch::Tensor &depths,
-    const torch::Tensor &conics,  // [C, N, 3] or [nnz, 3]
-    const torch::Tensor &opacities,// [C, N] or [nnz]
+    const torch::Tensor &conics,                     // [C, N, 3] or [nnz, 3]
+    const torch::Tensor &opacities,                  // [C, N] or [nnz]
     const at::optional<torch::Tensor> &camera_ids,   // [nnz]
     const at::optional<torch::Tensor> &gaussian_ids, // [nnz]
     const uint32_t C,
@@ -157,7 +156,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> isect_tiles_tensor(
     const uint32_t tile_width,
     const uint32_t tile_height,
     const bool sort,
-    const bool double_buffer
+    const bool double_buffer,
+    const bool use_snugbox_accutile
 );
 
 torch::Tensor isect_offset_encode_tensor(
@@ -331,7 +331,8 @@ void selective_adam_update(
     const float b2,
     const float eps,
     const uint32_t N,
-    const uint32_t M);
+    const uint32_t M
+);
 
 } // namespace gsplat
 

@@ -35,6 +35,7 @@ __global__ void fully_fused_projection_fwd_kernel(
     const T far_plane,
     const T radius_clip,
     const CameraModelType camera_model,
+    const bool use_safeguard, // NEW to implement safeguard score and forward pass
     // outputs
     int32_t *__restrict__ radii,  // [C, N]
     T *__restrict__ means2d,      // [C, N, 2]
@@ -215,7 +216,8 @@ fully_fused_projection_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const CameraModelType camera_model
+    const CameraModelType camera_model,
+    const bool use_safeguard // NEW to implement safeguard score and forward pass
 ) {
     GSPLAT_DEVICE_GUARD(means);
     GSPLAT_CHECK_INPUT(means);
@@ -264,6 +266,7 @@ fully_fused_projection_fwd_tensor(
                 far_plane,
                 radius_clip,
                 camera_model,
+                use_safeguard, // NEW to implement safeguard score and forward pass
                 radii.data_ptr<int32_t>(),
                 means2d.data_ptr<float>(),
                 depths.data_ptr<float>(),

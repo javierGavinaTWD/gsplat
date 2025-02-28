@@ -217,6 +217,7 @@ def fully_fused_projection(
     sparse_grad: bool = False,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+    use_safeguard: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
@@ -319,6 +320,7 @@ def fully_fused_projection(
             sparse_grad,
             calc_compensations,
             camera_model,
+            use_safeguard,
         )
     else:
         return _FullyFusedProjection.apply(
@@ -336,6 +338,7 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             camera_model,
+            use_safeguard,
         )
 
 
@@ -458,6 +461,7 @@ def rasterize_to_pixels(
     packed: bool = False,
     absgrad: bool = False,
     sqrgrad: bool = False,
+    use_safeguard: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -573,6 +577,7 @@ def rasterize_to_pixels(
         flatten_ids.contiguous(),
         absgrad,
         sqrgrad,
+        use_safeguard,
     )
 
     if padded_channels > 0:
@@ -804,6 +809,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         radius_clip: float,
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
+        use_safeguard: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
@@ -827,6 +833,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             radius_clip,
             calc_compensations,
             camera_model_type,
+            use_safeguard,
         )
         if not calc_compensations:
             compensations = None
@@ -929,6 +936,7 @@ class _RasterizeToPixels(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
         sqrgrad: bool,
+        use_safeguard: bool,
     ) -> Tuple[Tensor, Tensor]:
         render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
             "rasterize_to_pixels_fwd"
@@ -944,6 +952,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             tile_size,
             isect_offsets,
             flatten_ids,
+            use_safeguard,
         )
 
         ctx.save_for_backward(
@@ -1046,6 +1055,7 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,
             None,
             None,
+            None,  # Para evitar un error por pasar el use_safeguard en el backward por diferente numero de gradientes
         )
 
 

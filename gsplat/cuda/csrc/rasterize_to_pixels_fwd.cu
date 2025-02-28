@@ -31,6 +31,7 @@ __global__ void rasterize_to_pixels_fwd_kernel(
     const uint32_t tile_height,
     const int32_t *__restrict__ tile_offsets, // [C, tile_height, tile_width]
     const int32_t *__restrict__ flatten_ids,  // [n_isects]
+    const bool use_safeguard, // NEW to implement safeguard score and forward pass
     S *__restrict__ render_colors, // [C, image_height, image_width, COLOR_DIM]
     S *__restrict__ render_alphas, // [C, image_height, image_width, 1]
     int32_t *__restrict__ last_ids // [C, image_height, image_width]
@@ -199,7 +200,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
     const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
+    const torch::Tensor &flatten_ids,   // [n_isects]
+    const bool use_safeguard // NEW to implement safeguard score and forward pass
 ) {
     GSPLAT_DEVICE_GUARD(means2d);
     GSPLAT_CHECK_INPUT(means2d);
@@ -279,6 +281,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> call_kernel_with_dim(
             tile_height,
             tile_offsets.data_ptr<int32_t>(),
             flatten_ids.data_ptr<int32_t>(),
+            use_safeguard, // NEW to implement safeguard score and forward pass
             renders.data_ptr<float>(),
             alphas.data_ptr<float>(),
             last_ids.data_ptr<int32_t>()
@@ -302,7 +305,8 @@ rasterize_to_pixels_fwd_tensor(
     const uint32_t tile_size,
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
-    const torch::Tensor &flatten_ids   // [n_isects]
+    const torch::Tensor &flatten_ids,   // [n_isects]
+    const bool use_safeguard // NEW to implement safeguard score and forward pass
 ) {
     GSPLAT_CHECK_INPUT(colors);
     uint32_t channels = colors.size(-1);
@@ -320,7 +324,8 @@ rasterize_to_pixels_fwd_tensor(
             image_height,                                                      \
             tile_size,                                                         \
             tile_offsets,                                                      \
-            flatten_ids                                                        \
+            flatten_ids,                                                       \
+            use_safeguard                                                      \
         );
 
     // TODO: an optimization can be done by passing the actual number of

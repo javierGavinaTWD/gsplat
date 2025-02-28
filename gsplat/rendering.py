@@ -51,6 +51,7 @@ def rasterization(
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
     covars: Optional[Tensor] = None,
     use_snugbox_accutile: bool = False,
+    use_safeguard: bool = False,
 ) -> Tuple[Tensor, Tensor, Dict]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
@@ -311,6 +312,7 @@ def rasterization(
         sparse_grad=sparse_grad,
         calc_compensations=(rasterize_mode == "antialiased"),
         camera_model=camera_model,
+        use_safeguard=use_safeguard,
     )
 
     if packed:
@@ -553,6 +555,7 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
                 sqrgrad=sqrgrad,
+                use_safeguard=use_safeguard,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
@@ -573,6 +576,7 @@ def rasterization(
             packed=packed,
             absgrad=absgrad,
             sqrgrad=sqrgrad,
+            use_safeguard=use_safeguard,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth

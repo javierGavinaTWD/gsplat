@@ -178,6 +178,8 @@ class MultiStrategy(Strategy):
                     value=self.config.min_opa_prune * 2.0,
                 )
 
+            torch.cuda.empty_cache()
+
     def _update_state(
         self,
         params: Union[Dict[str, torch.nn.Parameter], torch.nn.ParameterDict],

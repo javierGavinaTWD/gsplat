@@ -400,6 +400,8 @@ class MultiStrategy(Strategy):
                 binoms=state["binoms"],
                 min_opacity=self.config.min_opa_relocate,
             )
+
+        torch.cuda.empty_cache()
         return n_relocate
 
     @torch.no_grad()
@@ -424,6 +426,8 @@ class MultiStrategy(Strategy):
                 binoms=state["binoms"],
                 min_opacity=self.config.min_opa_relocate,
             )
+
+        torch.cuda.empty_cache()
         return n_add
 
     @torch.no_grad()

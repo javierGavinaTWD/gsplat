@@ -217,7 +217,6 @@ def fully_fused_projection(
     sparse_grad: bool = False,
     calc_compensations: bool = False,
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-    use_safeguard: bool = False,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Projects Gaussians to 2D.
 
@@ -320,7 +319,6 @@ def fully_fused_projection(
             sparse_grad,
             calc_compensations,
             camera_model,
-            use_safeguard,
         )
     else:
         return _FullyFusedProjection.apply(
@@ -338,7 +336,6 @@ def fully_fused_projection(
             radius_clip,
             calc_compensations,
             camera_model,
-            use_safeguard,
         )
 
 
@@ -462,6 +459,8 @@ def rasterize_to_pixels(
     absgrad: bool = False,
     sqrgrad: bool = False,
     use_safeguard: bool = False,
+    safeguard_prune_topk: int = 10,
+    image_gt: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor]:
     """Rasterizes Gaussians to pixels.
 
@@ -563,7 +562,7 @@ def rasterize_to_pixels(
         tile_width * tile_size >= image_width
     ), f"Assert Failed: {tile_width} * {tile_size} >= {image_width}"
 
-    render_colors, render_alphas = _RasterizeToPixels.apply(
+    render_colors, render_alphas, safeguard_topk_mask = _RasterizeToPixels.apply(
         means2d.contiguous(),
         conics.contiguous(),
         colors.contiguous(),
@@ -578,11 +577,13 @@ def rasterize_to_pixels(
         absgrad,
         sqrgrad,
         use_safeguard,
+        safeguard_prune_topk,
+        image_gt.contiguous() if use_safeguard else None,
     )
 
     if padded_channels > 0:
         render_colors = render_colors[..., :-padded_channels]
-    return render_colors, render_alphas
+    return render_colors, render_alphas, safeguard_topk_mask
 
 
 @torch.no_grad()
@@ -809,16 +810,19 @@ class _FullyFusedProjection(torch.autograd.Function):
         radius_clip: float,
         calc_compensations: bool,
         camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole",
-        use_safeguard: bool = False,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
 
         # "covars" and {"quats", "scales"} are mutually exclusive
-        radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
-            "fully_fused_projection_fwd"
-        )(
+        (
+            radii,
+            means2d,
+            depths,
+            conics,
+            compensations,
+        ) = _make_lazy_cuda_func("fully_fused_projection_fwd")(
             means,
             covars,
             quats,
@@ -833,7 +837,6 @@ class _FullyFusedProjection(torch.autograd.Function):
             radius_clip,
             calc_compensations,
             camera_model_type,
-            use_safeguard,
         )
         if not calc_compensations:
             compensations = None
@@ -913,7 +916,6 @@ class _FullyFusedProjection(torch.autograd.Function):
             None,
             None,
             None,
-            None,
         )
 
 
@@ -936,11 +938,16 @@ class _RasterizeToPixels(torch.autograd.Function):
         flatten_ids: Tensor,  # [n_isects]
         absgrad: bool,
         sqrgrad: bool,
-        use_safeguard: bool,
+        use_safeguard: bool = False,
+        safeguard_prune_topk: int = 10,
+        image_gt: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
-        render_colors, render_alphas, last_ids = _make_lazy_cuda_func(
-            "rasterize_to_pixels_fwd"
-        )(
+        (
+            render_colors,
+            render_alphas,
+            last_ids,
+            safeguard_topk_mask,
+        ) = _make_lazy_cuda_func("rasterize_to_pixels_fwd")(
             means2d,
             conics,
             colors,
@@ -953,6 +960,8 @@ class _RasterizeToPixels(torch.autograd.Function):
             isect_offsets,
             flatten_ids,
             use_safeguard,
+            safeguard_prune_topk,
+            image_gt,
         )
 
         ctx.save_for_backward(
@@ -975,13 +984,18 @@ class _RasterizeToPixels(torch.autograd.Function):
 
         # double to float
         render_alphas = render_alphas.float()
-        return render_colors, render_alphas
+        return (
+            render_colors,
+            render_alphas,
+            safeguard_topk_mask,
+        )
 
     @staticmethod
     def backward(
         ctx,
         v_render_colors: Tensor,  # [C, H, W, 3]
         v_render_alphas: Tensor,  # [C, H, W, 1]
+        v_safeguard_topk_mask: Tensor,
     ):
         (
             means2d,
@@ -1055,7 +1069,10 @@ class _RasterizeToPixels(torch.autograd.Function):
             None,
             None,
             None,
-            None,  # Para evitar un error por pasar el use_safeguard en el backward por diferente numero de gradientes
+            # Safeguard Nones
+            None,
+            None,
+            None,
         )
 
 

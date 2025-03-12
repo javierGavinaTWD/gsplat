@@ -52,7 +52,9 @@ def rasterization(
     covars: Optional[Tensor] = None,
     use_snugbox_accutile: bool = False,
     use_safeguard: bool = False,
-) -> Tuple[Tensor, Tensor, Dict]:
+    safeguard_prune_topk: int = 10,
+    image_gt: Optional[Tensor] = None,
+) -> Tuple[Tensor, Tensor, Dict, Optional[Tensor]]:
     """Rasterize a set of 3D Gaussians (N) to a batch of image planes (C).
 
     This function provides a handful features for 3D Gaussian rasterization, which
@@ -241,6 +243,10 @@ def rasterization(
     assert viewmats.shape == (C, 4, 4), viewmats.shape
     assert Ks.shape == (C, 3, 3), Ks.shape
     assert render_mode in ["RGB", "D", "ED", "RGB+D", "RGB+ED"], render_mode
+    if use_safeguard:
+        assert (
+            image_gt is not None
+        ), "image_gt must be provided when use_safeguard is True"
 
     def reshape_view(C: int, world_view: torch.Tensor, N_world: list) -> torch.Tensor:
         view_list = list(
@@ -295,6 +301,7 @@ def rasterization(
         C = len(viewmats)
 
     # Project Gaussians to 2D. Directly pass in {quats, scales} is faster than precomputing covars.
+
     proj_results = fully_fused_projection(
         means,
         covars,
@@ -312,7 +319,6 @@ def rasterization(
         sparse_grad=sparse_grad,
         calc_compensations=(rasterize_mode == "antialiased"),
         camera_model=camera_model,
-        use_safeguard=use_safeguard,
     )
 
     if packed:
@@ -541,7 +547,7 @@ def rasterization(
                 if backgrounds is not None
                 else None
             )
-            render_colors_, render_alphas_ = rasterize_to_pixels(
+            render_colors_, render_alphas_, _ = rasterize_to_pixels(
                 means2d,
                 conics,
                 colors_chunk,
@@ -555,14 +561,13 @@ def rasterization(
                 packed=packed,
                 absgrad=absgrad,
                 sqrgrad=sqrgrad,
-                use_safeguard=use_safeguard,
             )
             render_colors.append(render_colors_)
             render_alphas.append(render_alphas_)
         render_colors = torch.cat(render_colors, dim=-1)
         render_alphas = render_alphas[0]  # discard the rest
     else:
-        render_colors, render_alphas = rasterize_to_pixels(
+        render_colors, render_alphas, safeguard_topk_mask = rasterize_to_pixels(
             means2d,
             conics,
             colors,
@@ -577,6 +582,8 @@ def rasterization(
             absgrad=absgrad,
             sqrgrad=sqrgrad,
             use_safeguard=use_safeguard,
+            safeguard_prune_topk=safeguard_prune_topk,
+            image_gt=image_gt,
         )
     if render_mode in ["ED", "RGB+ED"]:
         # normalize the accumulated depth to get the expected depth
@@ -588,7 +595,12 @@ def rasterization(
             dim=-1,
         )
 
-    return render_colors, render_alphas, meta
+    return (
+        render_colors,
+        render_alphas,
+        meta,
+        safeguard_topk_mask if use_safeguard else None,
+    )
 
 
 def _rasterization(

@@ -110,9 +110,9 @@ fully_fused_projection_fwd_tensor(
     const float far_plane,
     const float radius_clip,
     const bool calc_compensations,
-    const CameraModelType camera_model,
-    const bool use_safeguard
+    const CameraModelType camera_model
 );
+
 
 std::tuple<
     torch::Tensor,
@@ -168,7 +168,7 @@ torch::Tensor isect_offset_encode_tensor(
     const uint32_t tile_height
 );
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 rasterize_to_pixels_fwd_tensor(
     // Gaussian parameters
     const torch::Tensor &means2d,                   // [C, N, 2]
@@ -184,7 +184,9 @@ rasterize_to_pixels_fwd_tensor(
     // intersections
     const torch::Tensor &tile_offsets, // [C, tile_height, tile_width]
     const torch::Tensor &flatten_ids,   // [n_isects]
-    const bool use_safeguard
+    const bool use_safeguard,
+    const uint32_t safeguard_prune_topk,
+    const at::optional<torch::Tensor> &image_gt // [C, image_height, image_width, D]
 );
 
 std::tuple<
